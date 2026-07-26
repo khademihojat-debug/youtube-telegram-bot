@@ -1,9 +1,12 @@
-from telegram import ReplyKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-main_keyboard = ReplyKeyboardMarkup(
-    [
-        ["🎬 Download Video", "🎵 Download MP3"],
-        ["ℹ️ Help"],
-    ],
-    resize_keyboard=True
-)
+
+def download_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("🎬 Video", callback_data="video"),
+            InlineKeyboardButton("🎵 MP3", callback_data="audio"),
+        ]
+    ]
+
+    return InlineKeyboardMarkup(keyboard)

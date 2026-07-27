@@ -1,1 +1,2 @@
-python-telegram-bot[webhooks,job-queue]==20.7
+python-telegram-bot[all]==20.7
+yt-dlp

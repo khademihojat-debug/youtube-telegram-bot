@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-def build_quality_keyboard() -> InlineKeyboardMarkup:
+def build_quality_keyboard():
     keyboard = [
         [
             InlineKeyboardButton("360p", callback_data="q_360"),

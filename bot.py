@@ -65,3 +65,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "video":
+        await query.edit_message_text(f"Downloading video...\n{link}")
+
+    elif query.data == "audio":
+        await query.edit_message_text(f"Downloading audio...\n{link}")
+
+# ---------------------- MAIN (WEBHOOK) ----------------------
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT, message_handler))
+
+    port = int(os.environ.get("PORT", 8080))
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+    )
+
+if __name__ == "__main__":
+    main()

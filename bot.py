@@ -2,6 +2,7 @@ import logging
 import os
 import asyncio
 import sqlite3
+import re
 from datetime import date
 
 from telegram import (
@@ -29,6 +30,8 @@ logging.basicConfig(
 )
 
 DB_PATH = "data.db"
+
+# -------------------- DATABASE --------------------
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -77,7 +80,7 @@ def get_user_history(user_id):
     conn.close()
     return rows
 
-def increment_limit(user_id, max_per_day=10):
+def increment_limit(user_id, max_per_day=15):
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -107,8 +110,26 @@ def increment_limit(user_id, max_per_day=10):
     conn.close()
     return True
 
-user_links = {}
+# -------------------- LINK EXTRACTION --------------------
+
+def extract_youtube_link(text):
+    if not text:
+        return None
+
+    pattern = r"(https?://(?:www\.)?(?:youtube\.com|youtu\.be)[^\s]+)"
+    match = re.search(pattern, text)
+
+    if match:
+        link = match.group(1)
+        link = link.split("?")[0]
+        return link
+
+    return None
+
+# -------------------- DOWNLOAD QUEUE --------------------
+
 download_queue = asyncio.Queue()
+user_links = {}
 
 async def download_youtube(link, quality):
     ydl_opts = {
@@ -123,101 +144,12 @@ async def download_youtube(link, quality):
         thumb = info.get("thumbnail")
         return filename, thumb
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send me a YouTube link.")
-
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    rows = get_user_history(user_id)
-
-    if not rows:
-        await update.message.reply_text("📭 No history yet.")
-        return
-
-    msg = "📜 Your last downloads:\n\n"
-    for link, quality, ts in rows:
-        msg += f"{quality}p | {ts}\n{link}\n\n"
-
-    await update.message.reply_text(msg)
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not admin.")
-        return
-
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM downloads")
-    total = c.fetchone()[0]
-    conn.close()
-
-    await update.message.reply_text(f"🛠 Admin panel\nTotal downloads: {total}")
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    text = update.message.text.strip()
-
-    if "youtube.com" not in text and "youtu.be" not in text:
-        await update.message.reply_text("❌ Please send a valid YouTube link.")
-        return
-
-    user_id = update.effective_user.id
-
-    if not increment_limit(user_id):
-        await update.message.reply_text("⚠️ Daily limit reached.")
-        return
-
-    user_links[user_id] = text
-
-    keyboard = [
-        [
-            InlineKeyboardButton("360p", callback_data="q_360"),
-            InlineKeyboardButton("480p", callback_data="q_480"),
-        ],
-        [
-            InlineKeyboardButton("720p", callback_data="q_720"),
-            InlineKeyboardButton("1080p", callback_data="q_1080"),
-        ],
-        [
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel")
-        ]
-    ]
-
-    await update.message.reply_text(
-        "Choose video quality:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    link = user_links.get(user_id)
-
-    if query.data == "cancel":
-        await query.edit_message_text("❌ Canceled.")
-        return
-
-    if not link:
-        await query.edit_message_text("❌ No link found.")
-        return
-
-    if query.data.startswith("q_"):
-        quality = int(query.data.replace("q_", ""))
-
-        save_download(user_id, link, str(quality))
-
-        await query.edit_message_text(f"⏳ Added to queue… ({quality}p)")
-
-        await download_queue.put((user_id, link, quality, query))
-
 async def queue_worker():
     while True:
         user_id, link, quality, query = await download_queue.get()
 
         try:
-            await query.edit_message_text("⬇️ Downloading…")
+            await query.edit_message_text("⬇️ در حال دانلود...")
 
             filename, thumb = await download_youtube(link, quality)
 
@@ -231,22 +163,118 @@ async def queue_worker():
 
             if size_mb > 48:
                 await query.message.reply_text(
-                    f"⚠️ File is {int(size_mb)}MB — Telegram limit exceeded.\nSending as document:"
+                    f"⚠️ حجم فایل {int(size_mb)}MB است و از محدودیت تلگرام بیشتر است."
                 )
                 await query.message.reply_document(open(filename, "rb"))
             else:
                 await query.message.reply_document(
                     document=open(filename, "rb"),
-                    caption=f"✅ {quality}p video ready!"
+                    caption=f"✅ ویدیو {quality}p آماده شد!"
                 )
 
         except Exception as e:
-            await query.message.reply_text(f"❌ Error: {e}")
+            await query.message.reply_text(f"❌ خطا: {e}")
 
         download_queue.task_done()
 
+# -------------------- HANDLERS --------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("لینک یوتیوب را ارسال کن.")
+
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    rows = get_user_history(user_id)
+
+    if not rows:
+        await update.message.reply_text("📭 هنوز دانلودی انجام نداده‌ای.")
+        return
+
+    msg = "📜 آخرین دانلودهای تو:\n\n"
+    for link, quality, ts in rows:
+        msg += f"{quality}p | {ts}\n{link}\n\n"
+
+    await update.message.reply_text(msg)
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM downloads")
+    total = c.fetchone()[0]
+    conn.close()
+
+    await update.message.reply_text(f"🛠 پنل ادمین\nتعداد دانلودها: {total}")
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    link = extract_youtube_link(text)
+
+    if not link:
+        await update.message.reply_text("❌ لطفاً لینک یوتیوب بفرست.")
+        return
+
+    user_id = update.effective_user.id
+
+    if user_id != ADMIN_ID:
+        if not increment_limit(user_id):
+            await update.message.reply_text("⚠️ محدودیت روزانه‌ات تمام شده (۱۵ تا).")
+            return
+
+    user_links[user_id] = link
+
+    keyboard = [
+        [
+            InlineKeyboardButton("360p", callback_data="q_360"),
+            InlineKeyboardButton("480p", callback_data="q_480"),
+        ],
+        [
+            InlineKeyboardButton("720p", callback_data="q_720"),
+            InlineKeyboardButton("1080p", callback_data="q_1080"),
+        ],
+        [
+            InlineKeyboardButton("❌ لغو", callback_data="cancel")
+        ]
+    ]
+
+    await update.message.reply_text(
+        "کیفیت ویدیو را انتخاب کن:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    link = user_links.get(user_id)
+
+    if query.data == "cancel":
+        await query.edit_message_text("❌ لغو شد.")
+        return
+
+    if not link:
+        await query.edit_message_text("❌ لینک پیدا نشد.")
+        return
+
+    if query.data.startswith("q_"):
+        quality = int(query.data.replace("q_", ""))
+
+        save_download(user_id, link, str(quality))
+
+        await query.edit_message_text(f"⏳ در صف دانلود... ({quality}p)")
+
+        await download_queue.put((user_id, link, quality, query))
+
+# -------------------- POST INIT --------------------
+
 async def post_init(app):
     asyncio.create_task(queue_worker())
+
+# -------------------- MAIN --------------------
 
 def main():
     init_db()

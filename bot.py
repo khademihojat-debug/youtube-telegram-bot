@@ -10,9 +10,11 @@ from telegram.ext import (
     filters
 )
 
+# ---------------------- ENV VARIABLES ----------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("RAILWAY_STATIC_URL")  # Railway gives this automatically
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # MUST be set manually in Railway
 
+# ---------------------- LOGGING ----------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -63,28 +65,3 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "video":
-        await query.edit_message_text(f"Downloading video...\n{link}")
-    elif query.data == "audio":
-        await query.edit_message_text(f"Downloading audio...\n{link}")
-
-# ---------------------- MAIN (WEBHOOK) ----------------------
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT, message_handler))
-
-    # Railway webhook setup
-    port = int(os.environ.get("PORT", 8080))
-    webhook_url = f"https://{WEBHOOK_URL}/{BOT_TOKEN}"
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=webhook_url,
-    )
-
-if __name__ == "__main__":
-    main()

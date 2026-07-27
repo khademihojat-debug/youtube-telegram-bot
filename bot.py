@@ -68,7 +68,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 def save_download(user_id, link, quality, file_path=None, pixeldrain_url=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()

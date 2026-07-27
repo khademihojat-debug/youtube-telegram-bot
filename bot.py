@@ -38,6 +38,12 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
+c.execute("""
+    CREATE TABLE IF NOT EXISTS blocked_users (
+        user_id INTEGER PRIMARY KEY
+    )
+""")
+    
     c.execute("""
         CREATE TABLE IF NOT EXISTS downloads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +108,36 @@ def increment_limit(user_id, max_per_day=15):
     c.execute("SELECT count FROM limits WHERE user_id=? AND day=?", (user_id, today))
     row = c.fetchone()
 
+def block_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+def unblock_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM blocked_users WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def is_blocked(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM blocked_users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row is not None
+
+def get_blocked_users():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM blocked_users")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+    
     if row is None:
         c.execute(
             "INSERT INTO limits (user_id, day, count) VALUES (?, ?, ?)",
@@ -271,6 +307,9 @@ async def queue_worker():
         download_queue.task_done()
 
 # -------------------- HANDLERS --------------------
+if is_blocked(update.effective_user.id):
+    await update.message.reply_text("❌ دسترسی شما توسط ادمین مسدود شده است.")
+    return
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("لینک یوتیوب را ارسال کن.")
@@ -306,6 +345,48 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"کاربران روزانه محدود: ۱۵\n"
         f"ادمین: نامحدود"
     )
+
+async def blocked_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        return
+
+    rows = get_blocked_users()
+    if not rows:
+        await update.message.reply_text("هیچ کاربری بلاک نشده است.")
+        return
+
+    msg = "🚫 کاربران بلاک‌شده:\n\n"
+    for (uid,) in rows:
+        msg += f"- {uid}\n"
+
+    await update.message.reply_text(msg)
+
+async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("استفاده: /unblock <user_id>")
+        return
+
+    uid = int(context.args[0])
+    unblock_user(uid)
+    await update.message.reply_text(f"✅ کاربر {uid} آن‌بلاک شد.")
+
+async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("استفاده: /block <user_id>")
+        return
+
+    uid = int(context.args[0])
+    block_user(uid)
+    await update.message.reply_text(f"🚫 کاربر {uid} بلاک شد.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -387,7 +468,10 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT, message_handler))
-
+    app.add_handler(CommandHandler("block", block_cmd))
+    app.add_handler(CommandHandler("unblock", unblock_cmd))
+    app.add_handler(CommandHandler("blocked", blocked_list))
+    
     port = int(os.environ.get("PORT", 8080))
 
     app.run_webhook(

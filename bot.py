@@ -332,6 +332,26 @@ async def download_youtube_video(link: str, quality: int) -> Tuple[str, Optional
 async def download_youtube_audio(link: str, bitrate: str) -> Tuple[str, Optional[str]]:
     return await asyncio.to_thread(_download_youtube_audio_sync, link, bitrate)
 
+async def download_youtube_audio(link, bitrate):
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"audio_%(id)s_{bitrate}.%(ext)s",
+        "noplaylist": True,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": bitrate,
+            },
+        ],
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(link, download=True)
+        filename = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".mp3"
+        thumb = info.get("thumbnail")
+        return filename, thumb
+
 
 def get_quality_caption(quality: str) -> str:
     if quality == "a128":
@@ -442,23 +462,25 @@ async def queue_worker():
 
 def build_quality_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [
-            InlineKeyboardButton("360p", callback_data="q_360"),
-            InlineKeyboardButton("480p", callback_data="q_480"),
-        ],
-        [
-            InlineKeyboardButton("720p", callback_data="q_720"),
-            InlineKeyboardButton("1080p", callback_data="q_1080"),
-        ],
-        [
-            InlineKeyboardButton("4K", callback_data="q_2160"),
-            InlineKeyboardButton("🎧 128kbps", callback_data="q_a128"),
-            InlineKeyboardButton("🎧 320kbps", callback_data="q_a320"),
-        ],
-        [
-            InlineKeyboardButton("❌ لغو", callback_data="cancel"),
-        ],
+    [
+        InlineKeyboardButton("360p", callback_data="q_360"),
+        InlineKeyboardButton("480p", callback_data="q_480"),
+    ],
+    [
+        InlineKeyboardButton("720p", callback_data="q_720"),
+        InlineKeyboardButton("1080p", callback_data="q_1080"),
+    ],
+    [
+        InlineKeyboardButton("4K", callback_data="q_2160"),
+    ],
+    [
+    InlineKeyboardButton("🎧 128kbps", callback_data="q_a128"),
+    InlineKeyboardButton("🎧 320kbps", callback_data="q_a320"),
+    ],
+    [
+        InlineKeyboardButton("❌ لغو", callback_data="cancel")
     ]
+]
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -593,18 +615,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ لینک پیدا نشد. دوباره لینک را بفرست.")
         return
 
-    if query.data.startswith("q_"):
-        q = query.data.replace("q_", "")
+   if query.data == "q_a128":
+    await query.edit_message_text("⏳ در صف دانلود ... (128kbps)")
+    await download_queue.put((user_id, link, "a128", query))
+    return
 
-        if q == "a128":
-            await query.edit_message_text("⏳ در صف دانلود ... (128kbps)")
-            await download_queue.put((user_id, link, "a128", query))
-            return
-
-        if q == "a320":
-            await query.edit_message_text("⏳ در صف دانلود ... (320kbps)")
-            await download_queue.put((user_id, link, "a320", query))
-            return
+if query.data == "q_a320":
+    await query.edit_message_text("⏳ در صف دانلود ... (320kbps)")
+    await download_queue.put((user_id, link, "a320", query))
+    return
 
         await query.edit_message_text(f"⏳ در صف دانلود ... ({q}p)")
         await download_queue.put((user_id, link, q, query))

@@ -38,12 +38,12 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-c.execute("""
-    CREATE TABLE IF NOT EXISTS blocked_users (
-        user_id INTEGER PRIMARY KEY
-    )
-""")
-    
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_users (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS downloads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +67,7 @@ c.execute("""
 
     conn.commit()
     conn.close()
+
 
 def save_download(user_id, link, quality, file_path=None, pixeldrain_url=None):
     conn = sqlite3.connect(DB_PATH)

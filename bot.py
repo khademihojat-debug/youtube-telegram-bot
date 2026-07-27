@@ -19,18 +19,15 @@ from telegram.ext import (
 )
 import yt_dlp
 
-# ---------------------- ENV ----------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# ---------------------- LOGGING ----------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 
-# ---------------------- DATABASE ----------------------
 DB_PATH = "data.db"
 
 def init_db():
@@ -110,11 +107,9 @@ def increment_limit(user_id, max_per_day=10):
     conn.close()
     return True
 
-# ---------------------- GLOBALS ----------------------
 user_links = {}
 download_queue = asyncio.Queue()
 
-# ---------------------- YT-DLP ----------------------
 async def download_youtube(link, quality):
     ydl_opts = {
         "format": f"bestvideo[height={quality}]+bestaudio/best",
@@ -128,7 +123,6 @@ async def download_youtube(link, quality):
         thumb = info.get("thumbnail")
         return filename, thumb
 
-# ---------------------- COMMANDS ----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Send me a YouTube link.")
 
@@ -159,7 +153,6 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"🛠 Admin panel\nTotal downloads: {total}")
 
-# ---------------------- MESSAGE HANDLER ----------------------
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
@@ -195,7 +188,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------------------- BUTTON HANDLER ----------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -220,7 +212,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await download_queue.put((user_id, link, quality, query))
 
-# ---------------------- QUEUE WORKER ----------------------
 async def queue_worker():
     while True:
         user_id, link, quality, query = await download_queue.get()
@@ -254,19 +245,19 @@ async def queue_worker():
 
         download_queue.task_done()
 
-# ---------------------- MAIN ----------------------
+async def post_init(app):
+    asyncio.create_task(queue_worker())
+
 def main():
     init_db()
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT, message_handler))
-
-    asyncio.create_task(queue_worker())
 
     port = int(os.environ.get("PORT", 8080))
 

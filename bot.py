@@ -5,6 +5,7 @@ import sqlite3
 import re
 from datetime import date
 
+import requests
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -43,6 +44,8 @@ def init_db():
             user_id INTEGER,
             link TEXT,
             quality TEXT,
+            file_path TEXT,
+            pixeldrain_url TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -59,15 +62,26 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_download(user_id, link, quality):
+def save_download(user_id, link, quality, file_path=None, pixeldrain_url=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO downloads (user_id, link, quality) VALUES (?, ?, ?)",
-        (user_id, link, quality),
+        "INSERT INTO downloads (user_id, link, quality, file_path, pixeldrain_url) VALUES (?, ?, ?, ?, ?)",
+        (user_id, link, quality, file_path, pixeldrain_url),
     )
     conn.commit()
     conn.close()
+
+def get_cached_download(link, quality):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT file_path, pixeldrain_url FROM downloads WHERE link=? AND quality=? ORDER BY timestamp DESC LIMIT 1",
+        (link, quality),
+    )
+    row = c.fetchone()
+    conn.close()
+    return row
 
 def get_user_history(user_id):
     conn = sqlite3.connect(DB_PATH)
@@ -121,9 +135,21 @@ def extract_youtube_link(text):
 
     if match:
         link = match.group(1)
-        link = link.split("?")[0]
+        link = link.split("&")[0]
         return link
 
+    return None
+
+# -------------------- PIXELDRAIN --------------------
+
+def upload_to_pixeldrain(file_path):
+    url = "https://pixeldrain.com/api/file"
+    with open(file_path, "rb") as f:
+        files = {"file": f}
+        r = requests.post(url, files=files)
+    if r.status_code == 200:
+        file_id = r.json().get("id")
+        return f"https://pixeldrain.com/u/{file_id}"
     return None
 
 # -------------------- DOWNLOAD QUEUE --------------------
@@ -131,16 +157,37 @@ def extract_youtube_link(text):
 download_queue = asyncio.Queue()
 user_links = {}
 
-async def download_youtube(link, quality):
+async def download_youtube_video(link, quality):
     ydl_opts = {
-        "format": f"bestvideo[height={quality}]+bestaudio/best",
-        "outtmpl": "%(title)s_" + str(quality) + "p.%(ext)s",
+        "format": f"bestvideo[height={quality}]+bestaudio/best/best",
+        "outtmpl": f"%(title)s_{quality}p.%(ext)s",
         "noplaylist": True,
+        "merge_output_format": "mp4",
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(link, download=True)
         filename = ydl.prepare_filename(info)
+        thumb = info.get("thumbnail")
+        return filename, thumb
+
+async def download_youtube_audio(link):
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": "%(title)s_audio.%(ext)s",
+        "noplaylist": True,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ],
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(link, download=True)
+        filename = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".mp3"
         thumb = info.get("thumbnail")
         return filename, thumb
 
@@ -151,7 +198,37 @@ async def queue_worker():
         try:
             await query.edit_message_text("⬇️ در حال دانلود...")
 
-            filename, thumb = await download_youtube(link, quality)
+            # کش
+            cached = get_cached_download(link, quality)
+            if cached:
+                file_path, pixeldrain_url = cached
+                if pixeldrain_url:
+                    await query.message.reply_text(
+                        f"✅ این ویدیو قبلاً دانلود شده بود.\nلینک مستقیم:\n{pixeldrain_url}"
+                    )
+                    download_queue.task_done()
+                    continue
+                if file_path and os.path.exists(file_path):
+                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                    if size_mb > 48:
+                        pix_url = upload_to_pixeldrain(file_path)
+                        if pix_url:
+                            save_download(user_id, link, str(quality), file_path, pix_url)
+                            await query.message.reply_text(
+                                f"✅ لینک مستقیم (کش):\n{pix_url}"
+                            )
+                        else:
+                            await query.message.reply_document(open(file_path, "rb"))
+                    else:
+                        await query.message.reply_document(open(file_path, "rb"))
+                    download_queue.task_done()
+                    continue
+
+            # دانلود جدید
+            if quality == "audio":
+                filename, thumb = await download_youtube_audio(link)
+            else:
+                filename, thumb = await download_youtube_video(link, int(quality))
 
             size_mb = os.path.getsize(filename) / (1024 * 1024)
 
@@ -161,16 +238,32 @@ async def queue_worker():
                 except:
                     pass
 
+            pixeldrain_url = None
+
             if size_mb > 48:
                 await query.message.reply_text(
-                    f"⚠️ حجم فایل {int(size_mb)}MB است و از محدودیت تلگرام بیشتر است."
+                    f"⚠️ حجم فایل {int(size_mb)}MB است، روی Pixeldrain آپلود می‌شود..."
                 )
-                await query.message.reply_document(open(filename, "rb"))
+                pixeldrain_url = upload_to_pixeldrain(filename)
+                if pixeldrain_url:
+                    await query.message.reply_text(
+                        f"✅ لینک مستقیم:\n{pixeldrain_url}"
+                    )
+                else:
+                    await query.message.reply_document(open(filename, "rb"))
             else:
-                await query.message.reply_document(
-                    document=open(filename, "rb"),
-                    caption=f"✅ ویدیو {quality}p آماده شد!"
-                )
+                if quality == "audio":
+                    await query.message.reply_document(
+                        document=open(filename, "rb"),
+                        caption=f"✅ فایل صوتی آماده شد!"
+                    )
+                else:
+                    await query.message.reply_document(
+                        document=open(filename, "rb"),
+                        caption=f"✅ ویدیو {quality}p آماده شد!"
+                    )
+
+            save_download(user_id, link, str(quality), filename, pixeldrain_url)
 
         except Exception as e:
             await query.message.reply_text(f"❌ خطا: {e}")
@@ -192,7 +285,7 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = "📜 آخرین دانلودهای تو:\n\n"
     for link, quality, ts in rows:
-        msg += f"{quality}p | {ts}\n{link}\n\n"
+        msg += f"{quality} | {ts}\n{link}\n\n"
 
     await update.message.reply_text(msg)
 
@@ -207,7 +300,12 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = c.fetchone()[0]
     conn.close()
 
-    await update.message.reply_text(f"🛠 پنل ادمین\nتعداد دانلودها: {total}")
+    await update.message.reply_text(
+        f"🛠 پنل ادمین\n"
+        f"تعداد کل دانلودها: {total}\n"
+        f"کاربران روزانه محدود: ۱۵\n"
+        f"ادمین: نامحدود"
+    )
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -236,12 +334,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("1080p", callback_data="q_1080"),
         ],
         [
+            InlineKeyboardButton("4K", callback_data="q_2160"),
+            InlineKeyboardButton("🎧 Audio", callback_data="q_audio"),
+        ],
+        [
             InlineKeyboardButton("❌ لغو", callback_data="cancel")
         ]
     ]
 
     await update.message.reply_text(
-        "کیفیت ویدیو را انتخاب کن:",
+        "کیفیت را انتخاب کن:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -261,11 +363,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data.startswith("q_"):
-        quality = int(query.data.replace("q_", ""))
+        q = query.data.replace("q_", "")
+        quality = "audio" if q == "audio" else q
 
-        save_download(user_id, link, str(quality))
-
-        await query.edit_message_text(f"⏳ در صف دانلود... ({quality}p)")
+        await query.edit_message_text(f"⏳ در صف دانلود... ({quality})")
 
         await download_queue.put((user_id, link, quality, query))
 

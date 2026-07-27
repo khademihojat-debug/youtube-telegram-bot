@@ -210,14 +210,14 @@ async def download_youtube_video(link, quality):
 async def download_youtube_audio(link):
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": "%(title)s_audio.%(ext)s",
+        "outtmpl": "audio_%(id)s.%(ext)s",
         "noplaylist": True,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
-            }
+            },
         ],
     }
 

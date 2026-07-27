@@ -307,26 +307,52 @@ async def queue_worker():
         download_queue.task_done()
 
 # -------------------- HANDLERS --------------------
-if is_blocked(update.effective_user.id):
-    await update.message.reply_text("❌ دسترسی شما توسط ادمین مسدود شده است.")
-    return
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("لینک یوتیوب را ارسال کن.")
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    link = extract_youtube_link(text)
 
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    rows = get_user_history(user_id)
-
-    if not rows:
-        await update.message.reply_text("📭 هنوز دانلودی انجام نداده‌ای.")
+    if not link:
+        await update.message.reply_text("❌ لطفاً لینک یوتیوب بفرست.")
         return
 
-    msg = "📜 آخرین دانلودهای تو:\n\n"
-    for link, quality, ts in rows:
-        msg += f"{quality} | {ts}\n{link}\n\n"
+    user_id = update.effective_user.id
 
-    await update.message.reply_text(msg)
+    # اگر کاربر بلاک شده باشد
+    if is_blocked(user_id):
+        await update.message.reply_text("❌ دسترسی شما توسط ادمین مسدود شده است.")
+        return
+
+    # محدودیت روزانه برای کاربران معمولی
+    if user_id != ADMIN_ID:
+        if not increment_limit(user_id):
+            await update.message.reply_text("⚠️ محدودیت روزانه‌ات تمام شده (۱۵ تا).")
+            return
+
+    user_links[user_id] = link
+
+    keyboard = [
+        [
+            InlineKeyboardButton("360p", callback_data="q_360"),
+            InlineKeyboardButton("480p", callback_data="q_480"),
+        ],
+        [
+            InlineKeyboardButton("720p", callback_data="q_720"),
+            InlineKeyboardButton("1080p", callback_data="q_1080"),
+        ],
+        [
+            InlineKeyboardButton("4K", callback_data="q_2160"),
+            InlineKeyboardButton("🎧 Audio", callback_data="q_audio"),
+        ],
+        [
+            InlineKeyboardButton("❌ لغو", callback_data="cancel")
+        ]
+    ]
+
+    await update.message.reply_text(
+        "کیفیت را انتخاب کن:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:

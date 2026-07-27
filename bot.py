@@ -308,6 +308,9 @@ async def queue_worker():
 
 # -------------------- HANDLERS --------------------
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("سلام! لینک یوتیوب را ارسال کن تا دانلود کنم.")
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     link = extract_youtube_link(text)

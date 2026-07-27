@@ -261,8 +261,12 @@ async def queue_worker():
                     continue
 
             # دانلود جدید
-            if quality == "audio":
-                filename, thumb = await download_youtube_audio(link)
+           if quality == "a128":
+              filename, thumb = await download_youtube_audio(link, "128")
+
+           elif quality == "a320":
+               filename, thumb = await download_youtube_audio(link, "320")
+
             else:
                 filename, thumb = await download_youtube_video(link, int(quality))
 

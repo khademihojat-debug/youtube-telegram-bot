@@ -207,16 +207,16 @@ async def download_youtube_video(link, quality):
         thumb = info.get("thumbnail")
         return filename, thumb
 
-async def download_youtube_audio(link):
+async def download_youtube_audio(link, bitrate):
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": "audio_%(id)s.%(ext)s",
+        "outtmpl": f"audio_%(id)s_{bitrate}.%(ext)s",
         "noplaylist": True,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192",
+                "preferredquality": bitrate,
             },
         ],
     }
@@ -359,7 +359,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("4K", callback_data="q_2160"),
-            InlineKeyboardButton("🎧 Audio", callback_data="q_audio"),
+            InlineKeyboardButton("🎧 128kbps", callback_data="q_a128"),
+            InlineKeyboardButton("🎧 320kbps", callback_data="q_a320"),
         ],
         [
             InlineKeyboardButton("❌ لغو", callback_data="cancel")
@@ -459,7 +460,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("4K", callback_data="q_2160"),
-            InlineKeyboardButton("🎧 Audio", callback_data="q_audio"),
+            InlineKeyboardButton("🎧 128kbps", callback_data="q_a128"),
+            InlineKeyboardButton("🎧 320kbps", callback_data="q_a320"),
         ],
         [
             InlineKeyboardButton("❌ لغو", callback_data="cancel")

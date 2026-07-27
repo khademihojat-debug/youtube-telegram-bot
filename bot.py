@@ -280,10 +280,10 @@ async def download_youtube_audio(link, bitrate):
 
 def get_quality_caption(quality):
     if quality == "a128":
-        return "✅ فایل صوتی 128kbps آماده شد!"
+        return "فایل صوتی 128kbps آماده شد!"
     if quality == "a320":
-        return "✅ فایل صوتی 320kbps آماده شد!"
-    return f"✅ ویدیو {quality}p آماده شد!"
+        return "فایل صوتی 320kbps آماده شد!"
+    return f"ویدیو {quality}p آماده شد!"
 
 # -------------------- DOWNLOAD QUEUE --------------------
 
@@ -300,7 +300,7 @@ async def send_file_or_link(query, file_path, quality):
         pixeldrain_url = await asyncio.to_thread(upload_to_pixeldrain, file_path)
 
         if pixeldrain_url:
-            await query.message.reply_text(f"✅ لینک مستقیم:\n{pixeldrain_url}")
+            await query.message.reply_text(f"لینک مستقیم:\n{pixeldrain_url}")
             return pixeldrain_url
 
         await query.message.reply_document(
@@ -328,7 +328,7 @@ async def queue_worker():
 
                 if pixeldrain_url:
                     await query.message.reply_text(
-                        "✅ این فایل قبلاً دانلود شده بود.\n"
+                        "این فایل قبلاً دانلود شده بود.\n"
                         f"لینک مستقیم:\n{pixeldrain_url}"
                     )
                     continue
@@ -341,7 +341,7 @@ async def queue_worker():
                         if pix_url:
                             save_download(user_id, link, quality, file_path, pix_url)
                             await query.message.reply_text(
-                                f"✅ لینک مستقیم (کش):\n{pix_url}"
+                                f"لینک مستقیم (کش):\n{pix_url}"
                             )
                         else:
                             await query.message.reply_document(
@@ -373,7 +373,7 @@ async def queue_worker():
 
         except Exception as e:
             logger.exception("Download worker error: %s", e)
-            await query.message.reply_text(f"❌ خطا: {e}")
+            await query.message.reply_text(f"خطا: {e}")
 
         finally:
             download_queue.task_done()
@@ -398,7 +398,7 @@ def build_quality_keyboard():
             InlineKeyboardButton("🎧 320kbps", callback_data="q_a320"),
         ],
         [
-            InlineKeyboardButton("❌ لغو", callback_data="cancel"),
+            InlineKeyboardButton("لغو", callback_data="cancel"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -411,10 +411,10 @@ async def history(update, context):
     rows = get_user_history(user_id)
 
     if not rows:
-        await update.message.reply_text("📭 هنوز دانلودی انجام نداده‌ای.")
+        await update.message.reply_text("هنوز دانلودی انجام نداده‌ای.")
         return
 
-    msg = "📜 آخرین دانلودهای تو:\n\n"
+    msg = "آخرین دانلودهای تو:\n\n"
     for link, quality, ts in rows:
         msg += f"{quality} | {ts}\n{link}\n\n"
 
@@ -422,20 +422,20 @@ async def history(update, context):
 
 async def admin(update, context):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        await update.message.reply_text("فقط ادمین اجازه دارد.")
         return
 
     total = get_total_downloads()
     await update.message.reply_text(
-        f"🛠 پنل ادمین\n"
+        f"پنل ادمین\n"
         f"تعداد کل دانلودها: {total}\n"
-        f"کاربران روزانه محدود: {MAX_DAILY_DOWNLOADS}\n"
+        f"محدودیت روزانه کاربران: {MAX_DAILY_DOWNLOADS}\n"
         f"ادمین: نامحدود"
     )
 
 async def blocked_list(update, context):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        await update.message.reply_text("فقط ادمین اجازه دارد.")
         return
 
     rows = get_blocked_users()
@@ -443,7 +443,7 @@ async def blocked_list(update, context):
         await update.message.reply_text("هیچ کاربری بلاک نشده است.")
         return
 
-    msg = "🚫 کاربران بلاک‌شده:\n\n"
+    msg = "کاربران بلاک‌شده:\n\n"
     for (uid,) in rows:
         msg += f"- {uid}\n"
 
@@ -451,7 +451,7 @@ async def blocked_list(update, context):
 
 async def block_cmd(update, context):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        await update.message.reply_text("فقط ادمین اجازه دارد.")
         return
 
     if len(context.args) != 1:
@@ -461,15 +461,15 @@ async def block_cmd(update, context):
     try:
         uid = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("❌ user_id باید عدد باشد.")
+        await update.message.reply_text("user_id باید عدد باشد.")
         return
 
     block_user(uid)
-    await update.message.reply_text(f"🚫 کاربر {uid} بلاک شد.")
+    await update.message.reply_text(f"کاربر {uid} بلاک شد.")
 
 async def unblock_cmd(update, context):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
+        await update.message.reply_text("فقط ادمین اجازه دارد.")
         return
 
     if len(context.args) != 1:
@@ -479,29 +479,29 @@ async def unblock_cmd(update, context):
     try:
         uid = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("❌ user_id باید عدد باشد.")
+        await update.message.reply_text("user_id باید عدد باشد.")
         return
 
     unblock_user(uid)
-    await update.message.reply_text(f"✅ کاربر {uid} آن‌بلاک شد.")
+    await update.message.reply_text(f"کاربر {uid} آن‌بلاک شد.")
 
 async def message_handler(update, context):
     text = update.message.text
     link = extract_youtube_link(text)
 
     if not link:
-        await update.message.reply_text("❌ لطفاً لینک یوتیوب بفرست.")
+        await update.message.reply_text("لطفاً لینک یوتیوب بفرست.")
         return
 
     user_id = update.effective_user.id
 
     if is_blocked(user_id):
-        await update.message.reply_text("❌ دسترسی شما توسط ادمین مسدود شده است.")
+        await update.message.reply_text("دسترسی شما توسط ادمین مسدود شده است.")
         return
 
     if user_id != ADMIN_ID and not increment_limit(user_id):
         await update.message.reply_text(
-            f"⚠️ محدودیت روزانه‌ات تمام شده ({MAX_DAILY_DOWNLOADS} تا)."
+            f"محدودیت روزانه‌ات تمام شده ({MAX_DAILY_DOWNLOADS} تا)."
         )
         return
 
@@ -520,32 +520,30 @@ async def button_handler(update, context):
     link = user_links.get(user_id)
 
     if query.data == "cancel":
-        await query.edit_message_text("❌ لغو شد.")
+        await query.edit_message_text("لغو شد.")
         return
 
     if not link:
-        await query.edit_message_text("❌ لینک پیدا نشد. دوباره لینک را بفرست.")
+        await query.edit_message_text("لینک پیدا نشد. دوباره لینک را بفرست.")
         return
 
-    # کیفیت‌های صوتی
     if query.data == "q_a128":
-        await query.edit_message_text("⏳ در صف دانلود ... (128kbps)")
+        await query.edit_message_text("در صف دانلود ... (128kbps)")
         await download_queue.put((user_id, link, "a128", query))
         return
 
     if query.data == "q_a320":
-        await query.edit_message_text("⏳ در صف دانلود ... (320kbps)")
+        await query.edit_message_text("در صف دانلود ... (320kbps)")
         await download_queue.put((user_id, link, "a320", query))
         return
 
-    # کیفیت‌های ویدیو
     if query.data.startswith("q_"):
         q = query.data.replace("q_", "")
-        await query.edit_message_text(f"⏳ در صف دانلود ... ({q}p)")
+        await query.edit_message_text(f"در صف دانلود ... ({q}p)")
         await download_queue.put((user_id, link, q, query))
         return
 
-    await query.edit_message_text("❌ گزینه نامعتبر است.")
+    await query.edit_message_text("گزینه نامعتبر است.")
 
 # -------------------- POST INIT --------------------
 
@@ -566,30 +564,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(Commandخادمی، باشه—من الان **یک نسخهٔ کامل، تمیز، یک‌دست، بدون هیچ خطای فاصله، بدون کد تکراری، و کاملاً سازگار با Railway** از bot.py بهت می‌دم.
-
-این نسخه:
-
-- کیفیت‌های صوتی **128kbps** و **320kbps** را پشتیبانی می‌کند  
-- کیفیت‌های ویدیو مثل قبل کار می‌کنند  
-- queue_worker کاملاً سالم است  
-- button_handler کاملاً سالم است  
-- هیچ خطای Indentation ندارد  
-- هیچ تابع تکراری ندارد  
-- ساختار پروژه کاملاً استاندارد شده  
-- با requirements فعلی تو سازگار است  
-- روی Railway بدون خطا اجرا می‌شود  
-
-من فقط **bot.py** را می‌دهم، چون همین فایل مشکل داشت.
-
----
-
-# 🎯 نسخهٔ کامل و نهایی bot.py  
-این نسخه را **دقیقاً** جایگزین bot.py فعلی کن.
-
-> ⚠️ توجه: این نسخه کاملاً تمیز است و هیچ خطای فاصله ندارد.  
-> فقط Copy/Paste کن، بدون تغییر.
-
----
-
-### ✅ **bot.py — نسخهٔ کامل و اصلاح‌شده**
+    app.add_handler(CommandHandler("history", history))
+    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CommandHandler("block", block_cmd

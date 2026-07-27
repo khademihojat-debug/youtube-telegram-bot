@@ -477,24 +477,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user_id = query.from_user.id
-    link = user_links.get(user_id)
+user_id = query.from_user.id
+link = user_links.get(user_id)
 
-    if query.data == "cancel":
-        await query.edit_message_text("❌ لغو شد.")
-        return
+if query.data == "cancel":
+    await query.edit_message_text("❌ لغو شد.")
+    return
 
-    if not link:
-        await query.edit_message_text("❌ لینک پیدا نشد.")
-        return
+if not link:
+    await query.edit_message_text("لینک پیدا نشد.")
+    return
 
-    if query.data.startswith("q_"):
-        q = query.data.replace("q_", "")
-        quality = "audio" if q == "audio" else q
+# کیفیت‌های ویدیو
+if query.data.startswith("q_"):
+    q = query.data.replace("q_", "")
 
-        await query.edit_message_text(f"⏳ در صف دانلود... ({quality})")
-
+    # کیفیت‌های صوتی
+    if q == "a128":
+        quality = "a128"
+        await query.edit_message_text("⏳ در صف دانلود ... (128kbps)")
         await download_queue.put((user_id, link, quality, query))
+        return
+
+    if q == "a320":
+        quality = "a320"
+        await query.edit_message_text("⏳ در صف دانلود ... (320kbps)")
+        await download_queue.put((user_id, link, quality, query))
+        return
+
+    # کیفیت‌های ویدیو
+    quality = q
+    await query.edit_message_text(f"⏳ در صف دانلود ... ({quality})")
+    await download_queue.put((user_id, link, quality, query))
 
 # -------------------- POST INIT --------------------
 

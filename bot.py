@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("RAILWAY_STATIC_URL")  # Railway gives this automatically
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -66,7 +67,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "audio":
         await query.edit_message_text(f"Downloading audio...\n{link}")
 
-# ---------------------- MAIN ----------------------
+# ---------------------- MAIN (WEBHOOK) ----------------------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -74,7 +75,16 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT, message_handler))
 
-    app.run_polling()
+    # Railway webhook setup
+    port = int(os.environ.get("PORT", 8080))
+    webhook_url = f"https://{WEBHOOK_URL}/{BOT_TOKEN}"
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=webhook_url,
+    )
 
 if __name__ == "__main__":
     main()

@@ -311,6 +311,20 @@ async def queue_worker():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("سلام! لینک یوتیوب را ارسال کن تا دانلود کنم.")
 
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    rows = get_user_history(user_id)
+
+    if not rows:
+        await update.message.reply_text("📭 هنوز دانلودی انجام نداده‌ای.")
+        return
+
+    msg = "📜 آخرین دانلودهای تو:\n\n"
+    for link, quality, ts in rows:
+        msg += f"{quality} | {ts}\n{link}\n\n"
+
+    await update.message.reply_text(msg)
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     link = extract_youtube_link(text)

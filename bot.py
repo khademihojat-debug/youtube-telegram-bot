@@ -231,9 +231,6 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("history", history))
-    app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("block", block_cmd))
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("blocked", blocked_list))
@@ -243,11 +240,11 @@ def main():
     port = int(os.environ.get("PORT", 8080))
 
     app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
+    listen="0.0.0.0",
+    port=port,
+    url_path=BOT_TOKEN,
+    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+)
 
-if __name__ == "__main__":
+    if __name__ == "__main__":
     main()

@@ -9,7 +9,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 MAX_DAILY_DOWNLOADS = int(os.getenv("MAX_DAILY_DOWNLOADS", "15"))
 TELEGRAM_FILE_LIMIT_MB = int(os.getenv("TELEGRAM_FILE_LIMIT_MB", "48"))
-COOKIE_FILE = os.getenv("COOKIE_FILE", "cookies.txt")
+COOKIE_FILE = os.getenv("COOKIE_FILE", "/tmp/cookies.txt")
 
 
 def _ensure_writable_dir(path: Path) -> bool:

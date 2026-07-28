@@ -12,6 +12,22 @@ DOWNLOAD_PATH.mkdir(exist_ok=True)
 
 COOKIE_FILE = "cookies.txt"
 
+def get_available_qualities(link: str):
+    ydl_opts = {
+        "quiet": True,
+        "cookiefile": COOKIE_FILE,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(link, download=False)
+        formats = info.get("formats", [])
+
+    qualities = set()
+    for f in formats:
+        if f.get("height"):
+            qualities.add(f["height"])
+
+    return sorted(list(qualities))
+
 def upload_to_pixeldrain(file_path: str) -> Optional[str]:
     url = "https://pixeldrain.com/api/file"
     try:

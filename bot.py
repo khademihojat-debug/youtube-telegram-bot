@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from downloader import get_available_qualities, download_video, download_audio
@@ -48,9 +49,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = []
         for label, qid in qualities.items():
-            keyboard.append([InlineKeyboardButton(f"📹 {label}", callback_data=f"video|{link}|{qid}")])
-        keyboard.append([InlineKeyboardButton("🎵 MP3 128kbps", callback_data=f"audio|{link}|128")])
-        keyboard.append([InlineKeyboardButton("🎵 MP3 320kbps", callback_data=f"audio|{link}|320")])
+            # ارسال داده با json به جای | برای جلوگیری از خطا
+            data = json.dumps({"action": "video", "link": link, "quality": qid})
+            keyboard.append([InlineKeyboardButton(f"📹 {label}", callback_data=data)])
+        
+        # دکمه‌های صوتی
+        data_audio_128 = json.dumps({"action": "audio", "link": link, "quality": "128"})
+        data_audio_320 = json.dumps({"action": "audio", "link": link, "quality": "320"})
+        keyboard.append([InlineKeyboardButton("🎵 MP3 128kbps", callback_data=data_audio_128)])
+        keyboard.append([InlineKeyboardButton("🎵 MP3 320kbps", callback_data=data_audio_320)])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await msg.edit_text("🎯 کیفیت مورد نظر را انتخاب کنید:", reply_markup=reply_markup)
@@ -64,12 +72,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    data = query.data.split('|')
-    if len(data) < 3:
-        await query.edit_message_text("❌ داده نامعتبر.")
+    try:
+        # دریافت داده از json
+        data = json.loads(query.data)
+        action = data["action"]
+        link = data["link"]
+        quality = data["quality"]
+    except Exception as e:
+        await query.edit_message_text("❌ داده نامعتبر است.")
+        logger.error(f"Callback data error: {e}")
         return
 
-    action, link, quality = data[0], data[1], data[2]
     await query.edit_message_text("⏳ در حال دانلود... لطفاً صبر کنید.")
 
     try:

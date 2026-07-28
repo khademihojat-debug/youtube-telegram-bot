@@ -1,136 +1,114 @@
 import os
 import asyncio
-import yt_dlp
-from typing import Dict, Optional, Tuple
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from downloader import get_available_qualities, download_video, download_audio
 
-# تنظیمات مسیرها
-DOWNLOAD_DIR = os.environ.get("DATA_DIR", "./data") + "/downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN is required")
 
-def get_available_qualities(link: str) -> Dict[str, str]:
-    """
-    استخراج لیست کیفیت‌های موجود برای یک لینک.
-    فقط فرمت‌هایی که هم ویدیو و هم صدا دارند (یا ترکیبی) برمی‌گرداند.
-    """
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'ignoreerrors': True,
-        'extract_flat': False,
-    }
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Application.builder().token(BOT_TOKEN).build()
+user_data_store = {}
+
+def generate_uid(update: Update) -> str:
+    return f"{update.effective_user.id}_{update.effective_message.message_id}"
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🎬 لینک یوتیوب را بفرستید تا دانلود کنم.")
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    link = update.message.text.strip()
+    if not link.startswith(("http://", "https://")):
+        await update.message.reply_text("❌ لینک معتبر نیست.")
+        return
+
+    msg = await update.message.reply_text("⏳ در حال دریافت اطلاعات...")
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=False)
-            if info is None:
-                return {'best': 'best'}
-            
-            formats = info.get('formats', [])
-            qualities = {}
-            
-            for f in formats:
-                height = f.get('height')
-                # فقط فرمت‌هایی که ویدیو دارند و صدا هم دارند (یا حداقل acodec ندارند یعنی صدا ندارند؟)
-                # ما می‌خواهیم فرمت‌هایی که صدا دارند یا ترکیبی هستند
-                if height and f.get('vcodec') != 'none':
-                    # بررسی می‌کنیم که صدا داشته باشد یا فرمت ترکیبی باشد
-                    acodec = f.get('acodec')
-                    if acodec and acodec != 'none':
-                        # این فرمت هم ویدیو و هم صدا دارد
-                        qualities[f'{height}p'] = f['format_id']
-                    # اگر acodec='none' یعنی فقط ویدیو است، نادیده می‌گیریم
-            
-            # اگر هیچ فرمتی با صدا پیدا نشد، از best استفاده کن
-            if not qualities:
-                return {'best': 'best'}
-            return qualities
-            
-    except Exception:
-        return {'best': 'best', '720p': '22', '360p': '18'}
+        qualities = await asyncio.to_thread(get_available_qualities, link)
+        if not qualities:
+            await msg.edit_text("❌ کیفیتی یافت نشد.")
+            return
 
+        uid = generate_uid(update)
+        user_data_store[uid] = {"link": link}
 
-def _download_video_sync(link: str, quality: str) -> Tuple[str, Optional[str]]:
-    """
-    دانلود ویدیو با کیفیت مشخص (همراه با صدا)
-    اگر کیفیت انتخابی فقط ویدیو بدون صدا باشد، به فرمت کامل fallback می‌کند.
-    """
-    if quality == 'best':
-        # بهترین فرمتی که هم ویدیو و هم صدا دارد
-        fmt = 'best[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-    else:
-        # سعی می‌کنیم با کیفیت انتخاب شده دانلود کنیم، اگر صدا نداشت، بهترین ترکیبی را بگیر
-        fmt = f'{quality}+bestaudio/best'
+        keyboard = []
+        for label, qid in qualities.items():
+            keyboard.append([InlineKeyboardButton(f"📹 {label}", callback_data=f"v|{uid}|{qid}")])
+        keyboard.append([InlineKeyboardButton("🎵 MP3 128", callback_data=f"a|{uid}|128")])
+        keyboard.append([InlineKeyboardButton("🎵 MP3 320", callback_data=f"a|{uid}|320")])
 
-    ydl_opts = {
-        'format': fmt,
-        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-        'merge_output_format': 'mp4',
-        'quiet': True,
-        'no_warnings': True,
-        'ignoreerrors': True,
-    }
+        await msg.edit_text("🎯 کیفیت را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=True)
-            filename = ydl.prepare_filename(info)
-            # اگر فایل با پسوند دیگری ساخته شد، به mp4 تغییر بده
-            if not filename.endswith('.mp4'):
-                base = os.path.splitext(filename)[0]
-                if os.path.exists(base + '.mp4'):
-                    filename = base + '.mp4'
-                elif os.path.exists(filename):
-                    # اگر فایل موجود است ولی mp4 نیست، پسوند را تغییر نمی‌دهیم
-                    pass
-            return filename, None
-            
     except Exception as e:
-        # اگر خطا خورد، با بهترین کیفیت کامل امتحان کن
-        if quality != 'best':
-            return _download_video_sync(link, 'best')
-        raise
+        logger.error(f"message_handler error: {e}")
+        await msg.edit_text(f"❌ خطا: {str(e)[:100]}")
 
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-async def download_video(link: str, quality: str) -> Tuple[str, Optional[str]]:
-    return await asyncio.to_thread(_download_video_sync, link, quality)
-
-
-def _download_audio_sync(link: str, bitrate: str = '128') -> Tuple[str, Optional[str]]:
-    """
-    دانلود فقط صدا به صورت MP3 با بیت‌ریت مشخص
-    """
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': bitrate,
-        }],
-        'quiet': True,
-        'no_warnings': True,
-        'ignoreerrors': True,
-    }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=True)
-            filename = ydl.prepare_filename(info)
-            # تبدیل پسوند به mp3
-            filename = os.path.splitext(filename)[0] + '.mp3'
-            return filename, None
+        parts = query.data.split('|')
+        if len(parts) != 3:
+            await query.edit_message_text("❌ داده نامعتبر.")
+            return
+
+        action, uid, quality = parts
+        if uid not in user_data_store:
+            await query.edit_message_text("❌ لینک منقضی شده. دوباره لینک را بفرستید.")
+            return
+
+        link = user_data_store[uid]["link"]
+
     except Exception as e:
-        # اگر خطا داشت، بدون تبدیل دانلود کن
-        ydl_opts_no_convert = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
-            'ignoreerrors': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts_no_convert) as ydl:
-            info = ydl.extract_info(link, download=True)
-            filename = ydl.prepare_filename(info)
-            return filename, None
+        logger.error(f"callback parse error: {e}")
+        await query.edit_message_text("❌ خطا در پردازش.")
+        return
 
+    await query.edit_message_text("⏳ دانلود...")
 
-async def download_audio(link: str, bitrate: str = '128') -> Tuple[str, Optional[str]]:
-    return await asyncio.to_thread(_download_audio_sync, link, bitrate)
+    try:
+        if action == "v":
+            filename, _ = await download_video(link, quality)
+            caption = "🎬 ویدیو با صدا"
+        else:
+            filename, _ = await download_audio(link, quality)
+            caption = "🎵 فایل صوتی"
+
+        with open(filename, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=query.message.chat_id,
+                document=f,
+                caption=caption,
+                filename=os.path.basename(filename)
+            )
+
+        # پاک کردن فایل
+        try:
+            if os.path.exists(filename):
+                os.remove(filename)
+        except:
+            pass
+
+        if uid in user_data_store:
+            del user_data_store[uid]
+
+        await query.edit_message_text("✅ دانلود کامل شد!")
+
+    except Exception as e:
+        logger.error(f"download error: {e}")
+        await query.edit_message_text(f"❌ خطا: {str(e)[:100]}")
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+app.add_handler(CallbackQueryHandler(callback_handler))
+
+if __name__ == "__main__":
+    # همیشه از polling استفاده کن، نیازی به webhook نیست
+    app.run_polling()

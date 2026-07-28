@@ -1,3 +1,3 @@
 python-telegram-bot[webhooks]==21.10
-yt-dlp
+yt-dlp[default]
 httpx>=0.27,<1.0

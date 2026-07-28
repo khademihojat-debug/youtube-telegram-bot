@@ -83,16 +83,16 @@ async def send_large_file(bot, chat_id, file_path, caption, thumb=None):
                 thumb_file.close()
     else:
         try:
-            async with pixeldrain.Client() as client:
-                upload = await client.upload_file(file_path)
-                link = upload.get_url()
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"📁 **فایل بزرگ (>{TELEGRAM_FILE_LIMIT//1024//1024}MB)**\n"
-                         f"لینک دانلود: {link}\n"
-                         f"📂 نام فایل: `{os.path.basename(file_path)}`",
-                    parse_mode='Markdown'
-                )
+            upload = await asyncio.to_thread(pixeldrain.upload_file, file_path)
+            link = upload.get_url() if hasattr(upload, "get_url") else str(upload)
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"📁 **فایل بزرگ (>{TELEGRAM_FILE_LIMIT//1024//1024}MB)**\n"
+                     f"لینک دانلود: {link}\n"
+                     f"📂 نام فایل: `{os.path.basename(file_path)}`",
+                parse_mode='Markdown'
+            )
         except Exception as e:
             logger.error(f"Pixeldrain upload failed: {e}")
             raise RuntimeError("فایل بزرگ است و آپلود در Pixeldrain با خطا مواجه شد.") from e

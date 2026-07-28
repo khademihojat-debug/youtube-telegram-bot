@@ -3,20 +3,14 @@ import asyncio
 import yt_dlp
 from typing import Dict, Optional, Tuple
 
-# تنظیمات مسیرها (از متغیرهای محیطی خوانده می‌شود)
 DOWNLOAD_DIR = os.environ.get("DATA_DIR", "./data") + "/downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 def get_available_qualities(link: str) -> Dict[str, str]:
-    """
-    استخراج لیست کیفیت‌های موجود برای یک لینک.
-    در صورت بروز هر خطا، یک لیست پیش‌فرض شامل 'best' برمی‌گرداند.
-    """
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
-        'ignoreerrors': True,          # مهم: خطاهای فرمت را نادیده می‌گیرد
-        'extract_flat': False,
+        'ignoreerrors': True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -28,26 +22,21 @@ def get_available_qualities(link: str) -> Dict[str, str]:
             for f in formats:
                 height = f.get('height')
                 if height and f.get('vcodec') != 'none':
-                    qualities[f'{height}p'] = f['format_id']
-            # اگر هیچ فرمت ویدیویی نبود، بهترین را انتخاب کن
+                    acodec = f.get('acodec')
+                    if acodec and acodec != 'none':
+                        qualities[f'{height}p'] = f['format_id']
             if not qualities:
                 return {'best': 'best'}
             return qualities
     except Exception:
-        # در صورت هر گونه خطای غیرمنتظره، لیست پیش‌فرض
-        return {'best': 'best', '720p': '22', '360p': '18'}
-
+        return {'best': 'best'}
 
 def _download_video_sync(link: str, quality: str) -> Tuple[str, Optional[str]]:
-    """
-    دانلود همزمان ویدئو با کیفیت مشخص.
-    اگر کیفیت درخواستی موجود نباشد، به 'best' fallback می‌کند.
-    """
     if quality == 'best':
         fmt = 'bestvideo+bestaudio/best'
     else:
-        fmt = quality
-
+        fmt = f'{quality}+bestaudio/best'
+    
     ydl_opts = {
         'format': fmt,
         'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
@@ -55,37 +44,21 @@ def _download_video_sync(link: str, quality: str) -> Tuple[str, Optional[str]]:
         'quiet': True,
         'no_warnings': True,
         'ignoreerrors': True,
-        'writethumbnail': True,
     }
-
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(link, download=True)
             filename = ydl.prepare_filename(info)
-            # پیدا کردن فایل thumbnail
-            thumb = None
-            if info.get('thumbnails'):
-                thumb_url = info['thumbnails'][-1]['url']
-                # دانلود thumbnail (اختیاری)
-            return filename, thumb
+            return filename, None
     except Exception as e:
-        # اگر خطا به دلیل عدم دسترسی به فرمت بود و کیفیت 'best' نبود، دوباره با 'best' تلاش کن
-        if "Requested format is not available" in str(e) and quality != 'best':
+        if quality != 'best':
             return _download_video_sync(link, 'best')
         raise
 
-
 async def download_video(link: str, quality: str) -> Tuple[str, Optional[str]]:
-    """
-    نسخه ناهمگام دانلود ویدئو.
-    """
     return await asyncio.to_thread(_download_video_sync, link, quality)
 
-
-async def download_audio(link: str, bitrate: str = '128') -> Tuple[str, Optional[str]]:
-    """
-    استخراج صدا به صورت MP3 با بیت‌ریت مشخص (پیش‌فرض ۱۲۸).
-    """
+def _download_audio_sync(link: str, bitrate: str = '128') -> Tuple[str, Optional[str]]:
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
@@ -101,14 +74,19 @@ async def download_audio(link: str, bitrate: str = '128') -> Tuple[str, Optional
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(link, download=True)
-            filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
+            filename = ydl.prepare_filename(info)
+            filename = os.path.splitext(filename)[0] + '.mp3'
             return filename, None
-    except Exception as e:
-        if "Requested format is not available" in str(e):
-            # اگر خطا داشت، دوباره با تنظیمات ساده‌تر تلاش کن
-            ydl_opts['format'] = 'bestaudio'
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(link, download=True)
-                filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
-                return filename, None
-        raise
+    except Exception:
+        ydl_opts_no_convert = {
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
+            'quiet': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts_no_convert) as ydl:
+            info = ydl.extract_info(link, download=True)
+            filename = ydl.prepare_filename(info)
+            return filename, None
+
+async def download_audio(link: str, bitrate: str = '128') -> Tuple[str, Optional[str]]:
+    return await asyncio.to_thread(_download_audio_sync, link, bitrate)

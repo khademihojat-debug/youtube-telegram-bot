@@ -2,7 +2,6 @@ import os
 import asyncio
 import logging
 import json
-import base64
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from downloader import get_available_qualities, download_video, download_audio
@@ -17,18 +16,13 @@ logger = logging.getLogger(__name__)
 
 app = Application.builder().token(BOT_TOKEN).build()
 
-def encode_data(data: dict) -> str:
-    """تبدیل دیکشنری به base64 برای استفاده در callback_data"""
-    json_str = json.dumps(data, separators=(',', ':'))
-    return base64.b64encode(json_str.encode()).decode()
+# ========== دیکشنری برای ذخیره موقت لینک‌ها ==========
+# هر کاربر یه شناسه داره که لینک و کیفیت رو نگه می‌داره
+user_data_store = {}
 
-def decode_data(data: str) -> dict:
-    """تبدیل base64 به دیکشنری"""
-    try:
-        json_str = base64.b64decode(data.encode()).decode()
-        return json.loads(json_str)
-    except:
-        return {}
+def generate_id(update: Update) -> str:
+    """ساخت شناسه یکتا برای هر کاربر و هر پیام"""
+    return f"{update.effective_user.id}_{update.effective_message.message_id}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 به ربات دانلود یوتیوب خوش آمدید!\nلینک ویدئو را ارسال کنید.")
@@ -49,15 +43,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ کیفیتی پیدا نشد.")
             return
 
+        # ساخت شناسه یکتا برای این درخواست
+        uid = generate_id(update)
+        # ذخیره لینک در دیکشنری با شناسه
+        user_data_store[uid] = {"link": link}
+
         keyboard = []
         for label, qid in qualities.items():
-            data = encode_data({"action": "video", "link": link, "quality": qid})
-            keyboard.append([InlineKeyboardButton(f"📹 {label}", callback_data=data)])
+            # فقط کیفیت رو توی callback_data می‌فرستیم (کوتاه)
+            callback = f"v|{uid}|{qid}"
+            keyboard.append([InlineKeyboardButton(f"📹 {label}", callback_data=callback)])
         
-        data_audio_128 = encode_data({"action": "audio", "link": link, "quality": "128"})
-        data_audio_320 = encode_data({"action": "audio", "link": link, "quality": "320"})
-        keyboard.append([InlineKeyboardButton("🎵 MP3 128kbps", callback_data=data_audio_128)])
-        keyboard.append([InlineKeyboardButton("🎵 MP3 320kbps", callback_data=data_audio_320)])
+        # دکمه‌های صوتی
+        callback_128 = f"a|{uid}|128"
+        callback_320 = f"a|{uid}|320"
+        keyboard.append([InlineKeyboardButton("🎵 MP3 128kbps", callback_data=callback_128)])
+        keyboard.append([InlineKeyboardButton("🎵 MP3 320kbps", callback_data=callback_320)])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         await msg.edit_text("🎯 کیفیت را انتخاب کنید:", reply_markup=reply_markup)
@@ -71,16 +72,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     try:
-        data = decode_data(query.data)
-        if not data:
-            await query.edit_message_text("❌ داده نامعتبر است.")
+        # داده به صورت: action|uid|quality
+        parts = query.data.split('|')
+        if len(parts) != 3:
+            await query.edit_message_text("❌ داده نامعتبر.")
             return
-        action = data.get("action")
-        link = data.get("link")
-        quality = data.get("quality")
-        if not action or not link or not quality:
-            await query.edit_message_text("❌ داده ناقص است.")
+        
+        action, uid, quality = parts[0], parts[1], parts[2]
+        
+        # دریافت لینک از دیکشنری با شناسه
+        if uid not in user_data_store:
+            await query.edit_message_text("❌ لینک منقضی شده. لطفاً دوباره لینک را ارسال کنید.")
             return
+        
+        link = user_data_store[uid]["link"]
+        
     except Exception as e:
         logger.error(f"Callback parse error: {e}")
         await query.edit_message_text("❌ خطا در پردازش داده.")
@@ -89,10 +95,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⏳ در حال دانلود...")
 
     try:
-        if action == "video":
+        if action == "v":
             filename, thumb = await download_video(link, quality)
             caption = "🎬 ویدئو دانلود شد!"
-        else:
+        else:  # action == "a"
             filename, thumb = await download_audio(link, quality)
             caption = "🎵 فایل صوتی دانلود شد!"
 
@@ -104,6 +110,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=os.path.basename(filename)
             )
         os.remove(filename)
+        # پاک کردن از دیکشنری بعد از دانلود
+        if uid in user_data_store:
+            del user_data_store[uid]
         await query.edit_message_text("✅ دانلود کامل شد!")
 
     except Exception as e:
@@ -120,3 +129,4 @@ if __name__ == "__main__":
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
     else:
         app.run_polling()
+        

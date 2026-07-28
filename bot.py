@@ -13,7 +13,7 @@ from downloader import (
 
 from keyboards import build_quality_keyboard
 
-BOT_TOKEN = "توکن_ربات_تو_اینجا"
+BOT_TOKEN = "8949436596:AAFR-P2tUZTV-C98TfnmgJscoy3h8dQuR7s"
 
 # ---------------------------
 # هندلر پیام‌های یوتیوب

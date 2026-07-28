@@ -68,7 +68,7 @@ WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook")
 
 # اگر ست نشده بود، یک secret امن ساخته می‌شود
 # بهتر است این را در Railway به‌صورت env ثابت بگذاری
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or secrets.token_urlsafe(32)
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or secrets.token_hex(32)
 
 
 def extract_youtube_link(text: Optional[str]) -> Optional[str]:

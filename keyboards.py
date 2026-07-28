@@ -1,24 +1,13 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-def build_quality_keyboard():
-    keyboard = [
-        [
-            InlineKeyboardButton("360p", callback_data="q_360"),
-            InlineKeyboardButton("480p", callback_data="q_480"),
-        ],
-        [
-            InlineKeyboardButton("720p", callback_data="q_720"),
-            InlineKeyboardButton("1080p", callback_data="q_1080"),
-        ],
-        [
-            InlineKeyboardButton("4K", callback_data="q_2160"),
-        ],
-        [
-            InlineKeyboardButton("🎧 128kbps", callback_data="q_a128"),
-            InlineKeyboardButton("🎧 320kbps", callback_data="q_a320"),
-        ],
-        [
-            InlineKeyboardButton("❌ لغو", callback_data="cancel"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def build_quality_keyboard(real_qualities):
+    AVAILABLE = [144, 240, 360, 480, 720, 1080]
+
+    buttons = []
+    for q in AVAILABLE:
+        if q in real_qualities:
+            buttons.append([
+                InlineKeyboardButton(f"{q}p", callback_data=f"v_{q}")
+            ])
+
+    return InlineKeyboardMarkup(buttons)

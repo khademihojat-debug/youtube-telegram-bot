@@ -10,6 +10,23 @@ from yt_dlp import YoutubeDL
 
 from config import DOWNLOAD_DIR
 
+import subprocess
+import logging
+import os
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.info(subprocess.run(
+ ["yt-dlp", "--version"],
+ capture_output=True,
+ text=True
+).stdout)
+subprocess.run([
+ "yt-dlp",
+ "--cookies", "/app/cookies.txt",
+ "--simulate",
+ "https://www.youtube.com/watch?v=jWsFtWOuvu8"
+])
+
 
 DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
 DOWNLOAD_PATH.mkdir(parents=True, exist_ok=True)

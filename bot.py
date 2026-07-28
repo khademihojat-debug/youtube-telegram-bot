@@ -11,7 +11,6 @@ from database import (
     release_download_slot,
     save_history,
 )
-import pixeldrain
 
 # ========== تنظیمات ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -83,6 +82,7 @@ async def send_large_file(bot, chat_id, file_path, caption, thumb=None):
                 thumb_file.close()
     else:
         try:
+            import pixeldrain
             upload = await asyncio.to_thread(pixeldrain.upload_file, file_path)
             link = upload.get_url() if hasattr(upload, "get_url") else str(upload)
 
@@ -154,7 +154,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ لطفاً یک لینک معتبر ارسال کنید.")
         return
 
-    # بررسی محدودیت روزانه
     count = get_daily_count(user_id)
     if count >= MAX_DAILY:
         await update.message.reply_text(

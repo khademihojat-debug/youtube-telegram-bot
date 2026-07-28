@@ -1,5 +1,5 @@
 python-telegram-bot>=20.7
 yt-dlp>=2024.12.0
 aiofiles
-pixeldrain>=1.5.0
+Pixeldrain==1.1.2
 python-dotenv

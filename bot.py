@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import re
+import secrets
 from typing import Optional
 
 from telegram import Update
@@ -45,17 +47,28 @@ from downloader import (
 from keyboards import build_quality_keyboard
 
 
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+# جلوگیری از لو رفتن URL درخواست‌ها در لاگ
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 
 download_queue: asyncio.Queue = asyncio.Queue()
 user_links: dict[int, str] = {}
+
+# مسیر webhook را از توکن جدا نگه دار
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook")
+
+# اگر ست نشده بود، یک secret امن ساخته می‌شود
+# بهتر است این را در Railway به‌صورت env ثابت بگذاری
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or secrets.token_urlsafe(32)
 
 
 def extract_youtube_link(text: Optional[str]) -> Optional[str]:
@@ -68,6 +81,19 @@ def extract_youtube_link(text: Optional[str]) -> Optional[str]:
     )
     match = re.search(pattern, text)
     return match.group(1).strip() if match else None
+
+
+def sanitize_exception_text(exc: Exception) -> str:
+    text = str(exc)
+
+    # جلوگیری از نمایش توکن در خطاها
+    if BOT_TOKEN and BOT_TOKEN in text:
+        text = text.replace(BOT_TOKEN, "[REDACTED_BOT_TOKEN]")
+
+    if len(text) > 1200:
+        text = text[:1200] + "..."
+
+    return text
 
 
 async def queue_worker():
@@ -134,9 +160,10 @@ async def queue_worker():
             logger.info("queue_worker cancelled during job processing")
             raise
         except Exception as exc:
-            logger.exception("Download worker error: %s", exc)
+            safe_text = sanitize_exception_text(exc)
+            logger.exception("Download worker error: %s", safe_text)
             try:
-                await query.message.reply_text(f"❌ خطا: {exc}")
+                await query.message.reply_text(f"❌ خطا: {safe_text}")
             except Exception:
                 logger.warning(
                     "Could not send error message to user",
@@ -383,12 +410,20 @@ def main():
         app.run_polling(drop_pending_updates=True)
         return
 
+    if not WEBHOOK_URL.startswith("https://"):
+        raise RuntimeError("WEBHOOK_URL must start with https://")
+
+    full_webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{WEBHOOK_PATH}"
+
     logger.info("Starting bot in webhook mode on port %s", PORT)
+    logger.info("Webhook base domain configured successfully")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}",
+        url_path=WEBHOOK_PATH,
+        webhook_url=full_webhook_url,
+        secret_token=WEBHOOK_SECRET,
         drop_pending_updates=True,
     )
 

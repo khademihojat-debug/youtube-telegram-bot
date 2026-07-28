@@ -114,18 +114,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=os.path.basename(filename)
             )
         
-        # ====== پاک کردن فایل‌ها با مدیریت خطا ======
+        # ====== پاک کردن فایل‌ها با مدیریت خطا (کاملاً ایمن) ======
         try:
             if os.path.exists(filename):
                 os.remove(filename)
         except Exception as e:
             logger.warning(f"Could not remove file {filename}: {e}")
         
-        if thumb and isinstance(thumb, str) and os.path.exists(thumb):
-            try:
-                os.remove(thumb)
-            except Exception as e:
-                logger.warning(f"Could not remove thumbnail {thumb}: {e}")
+        # بررسی thumb فقط در صورتی که None نباشد و string باشد
+        if thumb is not None and isinstance(thumb, str):
+            if os.path.exists(thumb):
+                try:
+                    os.remove(thumb)
+                except Exception as e:
+                    logger.warning(f"Could not remove thumbnail {thumb}: {e}")
         
         # پاک کردن از دیکشنری
         if uid in user_data_store:

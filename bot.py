@@ -72,10 +72,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if action == "v":
-            filename, _ = await download_video(link, quality)
+            filename = await download_video(link, quality)
             caption = "🎬 ویدیو"
         else:
-            filename, _ = await download_audio(link, quality)
+            filename = await download_audio(link, quality)
             caption = "🎵 صدا"
 
         with open(filename, 'rb') as f:

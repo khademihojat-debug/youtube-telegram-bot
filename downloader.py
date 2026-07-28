@@ -13,11 +13,28 @@ from config import DOWNLOAD_DIR
 
 DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
 DOWNLOAD_PATH.mkdir(parents=True, exist_ok=True)
+
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
+COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "/app/cookies.txt")
 
 
 class DownloadError(Exception):
     pass
+
+
+def _base_opts() -> dict:
+    opts = {
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "outtmpl": str(DOWNLOAD_PATH / "%(title).180B [%(id)s].%(ext)s"),
+        "restrictfilenames": False,
+    }
+
+    if os.path.exists(COOKIES_FILE):
+        opts["cookiefile"] = COOKIES_FILE
+
+    return opts
 
 
 def _safe_prepare_filename(ydl: YoutubeDL, info: dict, forced_ext: Optional[str] = None) -> str:
@@ -47,14 +64,8 @@ def _video_format_selector(max_height: int) -> str:
 
 
 def _audio_options(bitrate: str) -> dict:
-    opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "outtmpl": str(DOWNLOAD_PATH / "%(title).180B [%(id)s].%(ext)s"),
-        "restrictfilenames": False,
-    }
+    opts = _base_opts()
+    opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
 
     if HAS_FFMPEG:
         opts["postprocessors"] = [
@@ -69,14 +80,8 @@ def _audio_options(bitrate: str) -> dict:
 
 
 def _video_options(quality: int) -> dict:
-    opts = {
-        "format": _video_format_selector(quality),
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "outtmpl": str(DOWNLOAD_PATH / "%(title).180B [%(id)s].%(ext)s"),
-        "restrictfilenames": False,
-    }
+    opts = _base_opts()
+    opts["format"] = _video_format_selector(quality)
 
     if HAS_FFMPEG:
         opts["merge_output_format"] = "mp4"
@@ -142,12 +147,10 @@ async def download_video(link: str, quality: int):
 
 
 def get_available_qualities(link: str) -> list[int]:
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
+    ydl_opts = _base_opts()
+    ydl_opts.update({
         "skip_download": True,
-        "noplaylist": True,
-    }
+    })
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(link, download=False)

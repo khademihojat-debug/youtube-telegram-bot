@@ -70,7 +70,11 @@ def extract_youtube_link(text: Optional[str]) -> Optional[str]:
 
 async def queue_worker():
     while True:
-        user_id, link, quality, query = await download_queue.get()
+        try:
+            user_id, link, quality, query = await download_queue.get()
+        except asyncio.CancelledError:
+            logger.info("queue_worker cancelled while waiting for next job")
+            break
 
         try:
             await query.edit_message_text("⬇️ در حال دانلود...")
@@ -88,12 +92,18 @@ async def queue_worker():
 
                 if file_path:
                     try:
-                        cached_link = await send_file_or_link(query.message, file_path, quality)
+                        cached_link = await send_file_or_link(
+                            query.message, file_path, quality
+                        )
                         if cached_link:
-                            save_download(user_id, link, quality, file_path, cached_link)
+                            save_download(
+                                user_id, link, quality, file_path, cached_link
+                            )
                         continue
                     except FileNotFoundError:
-                        logger.warning("Cached file no longer exists: %s", file_path)
+                        logger.warning(
+                            "Cached file no longer exists: %s", file_path
+                        )
 
             if quality == "a128":
                 filename, thumb = await download_audio(link, "128")
@@ -108,22 +118,37 @@ async def queue_worker():
                 except Exception:
                     logger.warning("Could not send thumbnail", exc_info=True)
 
-            pixeldrain_url = await send_file_or_link(query.message, filename, quality)
+            pixeldrain_url = await send_file_or_link(
+                query.message, filename, quality
+            )
             save_download(user_id, link, quality, filename, pixeldrain_url)
 
+        except asyncio.CancelledError:
+            logger.info("queue_worker cancelled during job processing")
+            raise
         except Exception as exc:
             logger.exception("Download worker error: %s", exc)
-            await query.message.reply_text(f"❌ خطا: {exc}")
-
+            try:
+                await query.message.reply_text(f"❌ خطا: {exc}")
+            except Exception:
+                logger.warning(
+                    "Could not send error message to user", exc_info=True
+                )
         finally:
             download_queue.task_done()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! لینک یوتیوب را بفرست تا دانلود کنم.")
+    if update.message:
+        await update.message.reply_text(
+            "سلام! لینک یوتیوب را بفرست تا دانلود کنم."
+        )
 
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+
     user_id = update.effective_user.id
     rows = get_user_history(user_id)
 
@@ -139,6 +164,9 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
         return
@@ -153,6 +181,9 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def blocked_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
         return
@@ -170,6 +201,9 @@ async def blocked_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
         return
@@ -189,6 +223,9 @@ async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ فقط ادمین اجازه دارد.")
         return
@@ -208,6 +245,9 @@ async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+
     text = update.message.text
     link = extract_youtube_link(text)
 
@@ -217,7 +257,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     if is_blocked(user_id):
-        await update.message.reply_text("❌ دسترسی شما توسط ادمین مسدود شده است.")
+        await update.message.reply_text(
+            "❌ دسترسی شما توسط ادمین مسدود شده است."
+        )
         return
 
     user_links[user_id] = link
@@ -225,7 +267,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         qualities = await asyncio.to_thread(get_available_qualities, link)
     except Exception:
-        logger.warning("Could not fetch real qualities for link: %s", link, exc_info=True)
+        logger.warning(
+            "Could not fetch real qualities for link: %s",
+            link,
+            exc_info=True,
+        )
         qualities = []
 
     await update.message.reply_text(
@@ -236,6 +282,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query:
+        return
+
     await query.answer()
 
     user_id = query.from_user.id
@@ -246,14 +295,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not link:
-        await query.edit_message_text("❌ لینک پیدا نشد. دوباره لینک را ارسال کن.")
+        await query.edit_message_text(
+            "❌ لینک پیدا نشد. دوباره لینک را ارسال کن."
+        )
         return
 
     if is_blocked(user_id):
-        await query.edit_message_text("❌ دسترسی شما توسط ادمین مسدود شده است.")
+        await query.edit_message_text(
+            "❌ دسترسی شما توسط ادمین مسدود شده است."
+        )
         return
 
-    if not query.data.startswith("q_"):
+    if not query.data or not query.data.startswith("q_"):
         await query.edit_message_text("❌ گزینه نامعتبر است.")
         return
 
@@ -265,12 +318,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     quality = query.data.replace("q_", "")
     waiting_label = quality if quality.startswith("a") else f"{quality}p"
+
     await query.edit_message_text(f"⏳ در صف دانلود ... ({waiting_label})")
     await download_queue.put((user_id, link, quality, query))
 
 
 async def post_init(app: Application):
-    app.bot_data["queue_worker"] = asyncio.create_task(queue_worker())
+    logger.info("Starting queue worker")
+    worker = asyncio.create_task(queue_worker(), name="queue_worker")
+    app.bot_data["queue_worker"] = worker
+
+
+async def post_stop(app: Application):
+    logger.info("Stopping queue worker")
+    worker = app.bot_data.get("queue_worker")
+
+    if worker and not worker.done():
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            logger.info("queue_worker cancelled successfully")
 
 
 def main():
@@ -279,7 +347,14 @@ def main():
 
     init_db()
 
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .post_stop(post_stop)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("admin", admin))
@@ -287,7 +362,9 @@ def main():
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("blocked", blocked_list))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
+    )
 
     logger.info("Storage dir: %s", STORAGE_DIR)
     logger.info("Download dir: %s", DOWNLOAD_DIR)

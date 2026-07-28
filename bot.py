@@ -86,7 +86,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=os.path.basename(filename)
             )
 
-        # پاک کردن فایل
         try:
             if os.path.exists(filename):
                 os.remove(filename)

@@ -10,6 +10,8 @@ from config import DOWNLOAD_DIR, TELEGRAM_FILE_LIMIT_MB
 DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
 DOWNLOAD_PATH.mkdir(exist_ok=True)
 
+COOKIE_FILE = "cookies.txt"
+
 def upload_to_pixeldrain(file_path: str) -> Optional[str]:
     url = "https://pixeldrain.com/api/file"
     try:
@@ -26,11 +28,12 @@ def upload_to_pixeldrain(file_path: str) -> Optional[str]:
 def _download_video_sync(link: str, quality: int) -> Tuple[str, Optional[str]]:
     outtmpl = str(DOWNLOAD_PATH / f"%(title).180B_%(id)s_{quality}p.%(ext)s")
     ydl_opts = {
-        "format": f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best",
+        "format": f"bestvideo[height<={quality}]+bestaudio/best",
         "outtmpl": outtmpl,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "quiet": True,
+        "cookiefile": COOKIE_FILE,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(link, download=True)
@@ -45,6 +48,7 @@ def _download_audio_sync(link: str, bitrate: str) -> Tuple[str, Optional[str]]:
         "outtmpl": outtmpl,
         "noplaylist": True,
         "quiet": True,
+        "cookiefile": COOKIE_FILE,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -67,10 +71,10 @@ async def download_audio(link: str, bitrate: str) -> Tuple[str, Optional[str]]:
 
 def get_quality_caption(quality: str) -> str:
     if quality == "a128":
-        return "✅ فایل صوتی 128kbps آماده شد!"
+        return "فایل صوتی 128kbps آماده شد!"
     if quality == "a320":
-        return "✅ فایل صوتی 320kbps آماده شد!"
-    return f"✅ ویدیو {quality}p آماده شد!"
+        return "فایل صوتی 320kbps آماده شد!"
+    return f"ویدیو {quality}p آماده شد!"
 
 async def send_file_or_link(query, file_path: str, quality: str) -> Optional[str]:
     size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -81,7 +85,7 @@ async def send_file_or_link(query, file_path: str, quality: str) -> Optional[str
         )
         pix_url = await asyncio.to_thread(upload_to_pixeldrain, file_path)
         if pix_url:
-            await query.message.reply_text(f"✅ لینک مستقیم:\n{pix_url}")
+            await query.message.reply_text(f"لینک مستقیم:\n{pix_url}")
             return pix_url
 
     await query.message.reply_document(

@@ -19,12 +19,12 @@ def generate_uid(update: Update) -> str:
     return f"{update.effective_user.id}_{update.effective_message.message_id}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎬 لینک یوتیوب را بفرستید تا دانلود کنم.")
+    await update.message.reply_text("🎬 لینک یوتیوب را بفرستید.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = update.message.text.strip()
     if not link.startswith(("http://", "https://")):
-        await update.message.reply_text("❌ لینک معتبر نیست.")
+        await update.message.reply_text("❌ لینک نامعتبر.")
         return
 
     msg = await update.message.reply_text("⏳ در حال دریافت اطلاعات...")
@@ -46,7 +46,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("🎯 کیفیت را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     except Exception as e:
-        logger.error(f"message_handler error: {e}")
+        logger.error(f"message_handler: {e}")
         await msg.edit_text(f"❌ خطا: {str(e)[:100]}")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -58,16 +58,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) != 3:
             await query.edit_message_text("❌ داده نامعتبر.")
             return
-
         action, uid, quality = parts
         if uid not in user_data_store:
-            await query.edit_message_text("❌ لینک منقضی شده. دوباره لینک را بفرستید.")
+            await query.edit_message_text("❌ لینک منقضی شده. دوباره ارسال کن.")
             return
-
         link = user_data_store[uid]["link"]
-
     except Exception as e:
-        logger.error(f"callback parse error: {e}")
+        logger.error(f"callback parse: {e}")
         await query.edit_message_text("❌ خطا در پردازش.")
         return
 
@@ -76,10 +73,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if action == "v":
             filename, _ = await download_video(link, quality)
-            caption = "🎬 ویدیو با صدا"
+            caption = "🎬 ویدیو"
         else:
             filename, _ = await download_audio(link, quality)
-            caption = "🎵 فایل صوتی"
+            caption = "🎵 صدا"
 
         with open(filename, 'rb') as f:
             await context.bot.send_document(
@@ -102,7 +99,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ دانلود کامل شد!")
 
     except Exception as e:
-        logger.error(f"download error: {e}")
+        logger.error(f"download: {e}")
         await query.edit_message_text(f"❌ خطا: {str(e)[:100]}")
 
 app.add_handler(CommandHandler("start", start))
@@ -110,5 +107,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
 app.add_handler(CallbackQueryHandler(callback_handler))
 
 if __name__ == "__main__":
-    # همیشه از polling استفاده کن، نیازی به webhook نیست
     app.run_polling()

@@ -74,7 +74,6 @@ def _download_audio_sync(link: str, bitrate: str = '128') -> str:
             filename = os.path.splitext(filename)[0] + '.mp3'
             return filename
     except Exception:
-        # fallback بدون تبدیل
         ydl_opts_no_convert = {
             'format': 'bestaudio/best',
             'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),

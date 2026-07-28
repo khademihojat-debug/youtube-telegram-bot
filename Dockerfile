@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# نصب NodeJS برای yt-dlp (ضروری)
+RUN apt-get update && apt-get install -y nodejs npm && npm install -g jsdom
+
 WORKDIR /app
 
 COPY . /app

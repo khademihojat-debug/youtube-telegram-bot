@@ -1,239 +1,114 @@
+import os
 import asyncio
-import mimetypes
-import os
-import shutil
-from pathlib import Path
-from typing import Optional
+import yt_dlp
+from typing import Dict, Optional, Tuple
 
-from telegram import Message
-from yt_dlp import YoutubeDL
+# تنظیمات مسیرها (از متغیرهای محیطی خوانده می‌شود)
+DOWNLOAD_DIR = os.environ.get("DATA_DIR", "./data") + "/downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-from config import DOWNLOAD_DIR
-
-import subprocess
-import logging
-import os
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-logger.info(subprocess.run(
- ["yt-dlp", "--version"],
- capture_output=True,
- text=True
-).stdout)
-subprocess.run([
- "yt-dlp",
- "--cookies", "/app/cookies.txt",
- "--simulate",
- "https://www.youtube.com/watch?v=jWsFtWOuvu8"
-])
-
-
-DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
-DOWNLOAD_PATH.mkdir(parents=True, exist_ok=True)
-
-HAS_FFMPEG = shutil.which("ffmpeg") is not None
-COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "/app/cookies.txt")
-
-
-class DownloadError(Exception):
-    pass
+def get_available_qualities(link: str) -> Dict[str, str]:
+    """
+    استخراج لیست کیفیت‌های موجود برای یک لینک.
+    در صورت بروز هر خطا، یک لیست پیش‌فرض شامل 'best' برمی‌گرداند.
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,          # مهم: خطاهای فرمت را نادیده می‌گیرد
+        'extract_flat': False,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=False)
+            if info is None:
+                return {'best': 'best'}
+            formats = info.get('formats', [])
+            qualities = {}
+            for f in formats:
+                height = f.get('height')
+                if height and f.get('vcodec') != 'none':
+                    qualities[f'{height}p'] = f['format_id']
+            # اگر هیچ فرمت ویدیویی نبود، بهترین را انتخاب کن
+            if not qualities:
+                return {'best': 'best'}
+            return qualities
+    except Exception:
+        # در صورت هر گونه خطای غیرمنتظره، لیست پیش‌فرض
+        return {'best': 'best', '720p': '22', '360p': '18'}
 
 
-def _base_opts() -> dict:
-    opts = {
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "outtmpl": str(DOWNLOAD_PATH / "%(title).180B [%(id)s].%(ext)s"),
-        "restrictfilenames": False,
+def _download_video_sync(link: str, quality: str) -> Tuple[str, Optional[str]]:
+    """
+    دانلود همزمان ویدئو با کیفیت مشخص.
+    اگر کیفیت درخواستی موجود نباشد، به 'best' fallback می‌کند.
+    """
+    if quality == 'best':
+        fmt = 'bestvideo+bestaudio/best'
+    else:
+        fmt = quality
+
+    ydl_opts = {
+        'format': fmt,
+        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
+        'merge_output_format': 'mp4',
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'writethumbnail': True,
     }
 
-    if os.path.exists(COOKIES_FILE):
-        opts["cookiefile"] = COOKIES_FILE
-
-    return opts
-
-
-def _safe_prepare_filename(ydl: YoutubeDL, info: dict, forced_ext: Optional[str] = None) -> str:
-    base_path = Path(ydl.prepare_filename(info))
-    if forced_ext:
-        base_path = base_path.with_suffix(f".{forced_ext}")
-    return str(base_path)
-
-
-def _video_format_selector(max_height: int) -> str:
-    max_height = int(max_height)
-
-    if HAS_FFMPEG:
-        return (
-            f"best[ext=mp4][height<={max_height}]"
-            f"/best[height<={max_height}]"
-            f"/bestvideo[ext=mp4][height<={max_height}]+bestaudio[ext=m4a]"
-            f"/bestvideo[height<={max_height}]+bestaudio"
-            f"/best"
-        )
-
-    return (
-        f"best[ext=mp4][height<={max_height}]"
-        f"/best[height<={max_height}]"
-        f"/best"
-    )
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=True)
+            filename = ydl.prepare_filename(info)
+            # پیدا کردن فایل thumbnail
+            thumb = None
+            if info.get('thumbnails'):
+                thumb_url = info['thumbnails'][-1]['url']
+                # دانلود thumbnail (اختیاری)
+            return filename, thumb
+    except Exception as e:
+        # اگر خطا به دلیل عدم دسترسی به فرمت بود و کیفیت 'best' نبود، دوباره با 'best' تلاش کن
+        if "Requested format is not available" in str(e) and quality != 'best':
+            return _download_video_sync(link, 'best')
+        raise
 
 
-def _audio_options(bitrate: str) -> dict:
-    opts = _base_opts()
-    opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
-
-    if HAS_FFMPEG:
-        opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": str(bitrate),
-            }
-        ]
-
-    return opts
-
-
-def _video_options(quality: int) -> dict:
-    opts = _base_opts()
-    opts["format"] = _video_format_selector(quality)
-
-    if HAS_FFMPEG:
-        opts["merge_output_format"] = "mp4"
-
-    return opts
-
-
-def _download_audio_sync(link: str, bitrate: str):
-    ydl_opts = _audio_options(bitrate)
-
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(link, download=True)
-        thumb = info.get("thumbnail")
-
-        if HAS_FFMPEG:
-            filename = _safe_prepare_filename(ydl, info, forced_ext="mp3")
-        else:
-            filename = _safe_prepare_filename(ydl, info)
-
-    if not os.path.exists(filename):
-        requested = info.get("requested_downloads") or []
-        if requested:
-            guessed = requested[0].get("filepath")
-            if guessed and os.path.exists(guessed):
-                filename = guessed
-
-    if not os.path.exists(filename):
-        raise FileNotFoundError(f"Audio file not found after download: {filename}")
-
-    return filename, thumb
-
-
-def _download_video_sync(link: str, quality: int):
-    ydl_opts = _video_options(quality)
-
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(link, download=True)
-        thumb = info.get("thumbnail")
-
-        ext = "mp4" if HAS_FFMPEG else info.get("ext")
-        filename = _safe_prepare_filename(ydl, info, forced_ext=ext)
-
-    if not os.path.exists(filename):
-        requested = info.get("requested_downloads") or []
-        for item in requested:
-            guessed = item.get("filepath")
-            if guessed and os.path.exists(guessed):
-                filename = guessed
-                break
-
-    if not os.path.exists(filename):
-        raise FileNotFoundError(f"Video file not found after download: {filename}")
-
-    return filename, thumb
-
-
-async def download_audio(link: str, bitrate: str):
-    return await asyncio.to_thread(_download_audio_sync, link, bitrate)
-
-
-async def download_video(link: str, quality: int):
+async def download_video(link: str, quality: str) -> Tuple[str, Optional[str]]:
+    """
+    نسخه ناهمگام دانلود ویدئو.
+    """
     return await asyncio.to_thread(_download_video_sync, link, quality)
 
 
-def get_available_qualities(link: str) -> list[int]:
-    ydl_opts = _base_opts()
-    ydl_opts.update({
-        "skip_download": True,
-    })
-
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(link, download=False)
-
-    heights: set[int] = set()
-    for fmt in info.get("formats", []):
-        height = fmt.get("height")
-        vcodec = fmt.get("vcodec")
-        if height and vcodec and vcodec != "none":
-            heights.add(int(height))
-
-    preferred = [144, 240, 360, 480, 720, 1080, 1440, 2160]
-    result = [q for q in preferred if q in heights]
-
-    if result:
-        return result
-
-    return sorted(heights)
-
-
-async def send_file_or_link(message: Message, file_path: str, quality: str) -> Optional[str]:
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(file_path)
-
-    mime_type, _ = mimetypes.guess_type(path.name)
-    mime_type = mime_type or "application/octet-stream"
-    caption = f"✅ آماده شد: {path.name}"
-    is_audio = quality.startswith("a") or mime_type.startswith("audio/")
-    is_video = mime_type.startswith("video/")
-
+async def download_audio(link: str, bitrate: str = '128') -> Tuple[str, Optional[str]]:
+    """
+    استخراج صدا به صورت MP3 با بیت‌ریت مشخص (پیش‌فرض ۱۲۸).
+    """
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': bitrate,
+        }],
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+    }
     try:
-        with path.open("rb") as file_obj:
-            if is_audio:
-                await message.reply_audio(
-                    audio=file_obj,
-                    filename=path.name,
-                    caption=caption,
-                )
-                return None
-    except Exception:
-        pass
-
-    try:
-        with path.open("rb") as file_obj:
-            if is_video and not is_audio:
-                await message.reply_video(
-                    video=file_obj,
-                    filename=path.name,
-                    caption=caption,
-                    supports_streaming=True,
-                )
-                return None
-    except Exception:
-        pass
-
-    try:
-        with path.open("rb") as file_obj:
-            await message.reply_document(
-                document=file_obj,
-                filename=path.name,
-                caption=caption,
-            )
-            return None
-    except Exception as exc:
-        raise DownloadError(
-            "فایل دانلود شد ولی ارسال آن در تلگرام ناموفق بود. "
-            "اگر فایل خیلی بزرگ است، محدودیت ارسال تلگرام یا سرور را بررسی کن."
-        ) from exc
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=True)
+            filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
+            return filename, None
+    except Exception as e:
+        if "Requested format is not available" in str(e):
+            # اگر خطا داشت، دوباره با تنظیمات ساده‌تر تلاش کن
+            ydl_opts['format'] = 'bestaudio'
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(link, download=True)
+                filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
+                return filename, None
+        raise

@@ -27,14 +27,16 @@ def upload_to_pixeldrain(file_path: str) -> Optional[str]:
 
 def _download_video_sync(link: str, quality: int) -> Tuple[str, Optional[str]]:
     outtmpl = str(DOWNLOAD_PATH / f"%(title).180B_%(id)s_{quality}p.%(ext)s")
+
     ydl_opts = {
-        "format": f"bestvideo[height<={quality}]+bestaudio/best",
+        "format": f"bestvideo[height<={quality}]+bestaudio/best/best",
         "outtmpl": outtmpl,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "quiet": True,
         "cookiefile": COOKIE_FILE,
     }
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(link, download=True)
         filename = ydl.prepare_filename(info)
@@ -43,6 +45,7 @@ def _download_video_sync(link: str, quality: int) -> Tuple[str, Optional[str]]:
 
 def _download_audio_sync(link: str, bitrate: str) -> Tuple[str, Optional[str]]:
     outtmpl = str(DOWNLOAD_PATH / f"audio_%(id)s_{bitrate}.%(ext)s")
+
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": outtmpl,
@@ -57,6 +60,7 @@ def _download_audio_sync(link: str, bitrate: str) -> Tuple[str, Optional[str]]:
             }
         ],
     }
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(link, download=True)
         filename = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".mp3"

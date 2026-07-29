@@ -1,20 +1,48 @@
 import os
 import asyncio
 import inspect
+import logging
 import yt_dlp
 from typing import Dict, Optional, Tuple
 import time
+
+logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = os.path.join(os.environ.get("DATA_DIR", "./data"), "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 COOKIE_FILE = os.environ.get("COOKIE_FILE")
 
+# player clients to try — android/ios often bypass the "sign in to confirm
+# you're not a bot" block that hits plain "web" requests from datacenter IPs
+YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
+
 
 def get_cookie_file() -> Optional[str]:
     if COOKIE_FILE and os.path.exists(COOKIE_FILE):
         return COOKIE_FILE
     return None
+
+
+def _base_opts() -> dict:
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        # NOTE: ignoreerrors is intentionally OFF. With it on, yt-dlp
+        # swallows the real failure (bot-check, 403, etc.) and just
+        # returns None, which is why you were seeing the generic
+        # "Could not extract video info" message instead of the real cause.
+        "ignoreerrors": False,
+        "extractor_args": {
+            "youtube": {
+                "player_client": YOUTUBE_PLAYER_CLIENTS,
+            }
+        },
+    }
+    cookie = get_cookie_file()
+    if cookie:
+        opts["cookiefile"] = cookie
+    return opts
 
 
 class ProgressHook:
@@ -45,21 +73,14 @@ class ProgressHook:
 
 
 def get_available_qualities(link: str) -> Dict[str, str]:
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "ignoreerrors": True,
-    }
-
-    cookie = get_cookie_file()
-    if cookie:
-        ydl_opts["cookiefile"] = cookie
+    ydl_opts = _base_opts()
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(link, download=False)
 
             if info is None:
+                logger.error(f"extract_info returned None for link: {link}")
                 return {"best": "best"}
 
             if "entries" in info:
@@ -91,7 +112,10 @@ def get_available_qualities(link: str) -> Dict[str, str]:
 
             return sorted_qualities if sorted_qualities else {"best": "best"}
 
-    except Exception:
+    except Exception as e:
+        # Log the REAL reason (bot-check, 403, private video, etc.) instead
+        # of silently hiding it. Check your server logs when this happens.
+        logger.error(f"get_available_qualities failed for {link}: {e}")
         return {"best": "best"}
 
 
@@ -102,22 +126,18 @@ def _download_video_sync(
 ) -> Tuple[str, Optional[str]]:
     fmt = "bestvideo+bestaudio/best" if quality == "best" else f"{quality}+bestaudio/best"
 
-    ydl_opts = {
+    ydl_opts = _base_opts()
+    ydl_opts.update({
         "format": fmt,
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
         "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "ignoreerrors": True,
         "writethumbnail": True,
-    }
-
-    cookie = get_cookie_file()
-    if cookie:
-        ydl_opts["cookiefile"] = cookie
+    })
 
     if progress_callback:
         ydl_opts["progress_hooks"] = [ProgressHook(progress_callback)]
+
+    cookie = get_cookie_file()
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -136,6 +156,7 @@ def _download_video_sync(
                 try:
                     ydl_opts_thumb = {
                         "quiet": True,
+                        "no_warnings": True,
                         "skip_download": True,
                         "writethumbnail": True,
                         "outtmpl": os.path.splitext(filename)[0],
@@ -157,7 +178,8 @@ def _download_video_sync(
 
             return filename, thumb
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"_download_video_sync failed for {link} (quality={quality}): {e}")
         if quality != "best":
             return _download_video_sync(link, "best", progress_callback)
         raise
@@ -172,7 +194,8 @@ async def download_video(
 
 
 def _download_audio_sync(link: str, bitrate: str = "128", progress_callback=None) -> str:
-    ydl_opts = {
+    ydl_opts = _base_opts()
+    ydl_opts.update({
         "format": "bestaudio/best",
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
         "postprocessors": [{
@@ -180,14 +203,7 @@ def _download_audio_sync(link: str, bitrate: str = "128", progress_callback=None
             "preferredcodec": "mp3",
             "preferredquality": bitrate,
         }],
-        "quiet": True,
-        "no_warnings": True,
-        "ignoreerrors": True,
-    }
-
-    cookie = get_cookie_file()
-    if cookie:
-        ydl_opts["cookiefile"] = cookie
+    })
 
     if progress_callback:
         ydl_opts["progress_hooks"] = [ProgressHook(progress_callback)]
@@ -202,17 +218,14 @@ def _download_audio_sync(link: str, bitrate: str = "128", progress_callback=None
             filename = os.path.splitext(filename)[0] + ".mp3"
             return filename
 
-    except Exception:
-        ydl_opts_no_convert = {
+    except Exception as e:
+        logger.error(f"_download_audio_sync (mp3 convert) failed for {link}: {e}")
+
+        ydl_opts_no_convert = _base_opts()
+        ydl_opts_no_convert.update({
             "format": "bestaudio/best",
             "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
-            "quiet": True,
-            "no_warnings": True,
-            "ignoreerrors": True,
-        }
-
-        if cookie:
-            ydl_opts_no_convert["cookiefile"] = cookie
+        })
 
         if progress_callback:
             ydl_opts_no_convert["progress_hooks"] = [ProgressHook(progress_callback)]
@@ -245,5 +258,6 @@ def is_playlist(link: str) -> bool:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(link, download=False)
             return bool(info and "entries" in info and len(info["entries"]) > 1)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"is_playlist check failed for {link}: {e}")
         return False

@@ -13,14 +13,35 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 COOKIE_FILE = os.environ.get("COOKIE_FILE")
 
+# Alternative to COOKIE_FILE: paste the raw contents of cookies.txt directly
+# into a normal environment variable (useful on hosts/plans where the
+# "Secret Files" upload feature isn't available). If set, we write it to a
+# local file once at startup and use that.
+COOKIES_CONTENT = os.environ.get("COOKIES_CONTENT")
+_COOKIES_CONTENT_PATH = os.path.join(DOWNLOAD_DIR, "..", "cookies_from_env.txt")
+
+if COOKIES_CONTENT:
+    try:
+        _COOKIES_CONTENT_PATH = os.path.abspath(_COOKIES_CONTENT_PATH)
+        with open(_COOKIES_CONTENT_PATH, "w", encoding="utf-8") as f:
+            f.write(COOKIES_CONTENT)
+        logger.info(f"Wrote cookies from COOKIES_CONTENT env var to {_COOKIES_CONTENT_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to write COOKIES_CONTENT to file: {e}")
+        _COOKIES_CONTENT_PATH = None
+
 # player clients to try — android/ios often bypass the "sign in to confirm
 # you're not a bot" block that hits plain "web" requests from datacenter IPs
 YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
 
 
 def get_cookie_file() -> Optional[str]:
+    # Priority 1: explicit file path (e.g. a Render Secret File)
     if COOKIE_FILE and os.path.exists(COOKIE_FILE):
         return COOKIE_FILE
+    # Priority 2: cookie content pasted into a plain env var
+    if COOKIES_CONTENT and _COOKIES_CONTENT_PATH and os.path.exists(_COOKIES_CONTENT_PATH):
+        return _COOKIES_CONTENT_PATH
     return None
 
 
@@ -42,6 +63,9 @@ def _base_opts() -> dict:
     cookie = get_cookie_file()
     if cookie:
         opts["cookiefile"] = cookie
+        logger.info(f"Using cookie file: {cookie}")
+    else:
+        logger.warning("No cookie file found — requests will be sent without login")
     return opts
 
 

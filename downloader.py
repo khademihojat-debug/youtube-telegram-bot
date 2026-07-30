@@ -121,7 +121,11 @@ def get_available_qualities(link: str) -> Dict[str, str]:
                     continue
 
                 label = f"{height}p"
-                qualities.setdefault(label, fmt["format_id"])
+                # ارتفاع (height) رو ذخیره می‌کنیم، نه format_id ثابت — چون
+                # yt-dlp بین کلاینت‌های مختلف (android/web) می‌چرخه و ممکنه
+                # همون format_id توی درخواست دانلود دیگه وجود نداشته باشه.
+                # ارتفاع همیشه پایدار و قابل‌اعتمادتره.
+                qualities.setdefault(label, str(height))
 
             def sort_key(item):
                 label = item[0]
@@ -148,7 +152,13 @@ def _download_video_sync(
     quality: str,
     progress_callback=None
 ) -> Tuple[str, Optional[str]]:
-    fmt = "bestvideo+bestaudio/best" if quality == "best" else f"{quality}+bestaudio/best"
+    if quality == "best":
+        fmt = "bestvideo+bestaudio/best"
+    else:
+        # quality اینجا یه عدد ارتفاع (مثل "1080") هست، نه format_id — این
+        # selector همیشه بهترین فرمت موجود در همون ارتفاع رو انتخاب می‌کنه،
+        # صرف‌نظر از اینکه کدوم player client جواب داده.
+        fmt = f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best[height<={quality}]"
 
     ydl_opts = _base_opts()
     ydl_opts.update({

@@ -46,6 +46,15 @@ def get_cookie_file() -> Optional[str]:
 
 
 def _base_opts() -> dict:
+    cookie = get_cookie_file()
+
+    # نکته‌ی مهم: کلاینت android برای دور زدن بلاک «Sign in to confirm
+    # you're not a bot» خوبه، ولی وقتی کوکی معتبر (لاگین) داریم، فرمت‌های
+    # همین کلاینت android خراب/محدود می‌شن و ارور «Requested format is not
+    # available» می‌دن. پس وقتی کوکی داریم فقط از کلاینت web استفاده می‌کنیم؛
+    # کلاینت android رو فقط به‌عنوان fallback وقتی کوکی نداریم نگه می‌داریم.
+    player_clients = ["web"] if cookie else YOUTUBE_PLAYER_CLIENTS
+
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -56,11 +65,10 @@ def _base_opts() -> dict:
         "ignoreerrors": False,
         "extractor_args": {
             "youtube": {
-                "player_client": YOUTUBE_PLAYER_CLIENTS,
+                "player_client": player_clients,
             }
         },
     }
-    cookie = get_cookie_file()
     if cookie:
         opts["cookiefile"] = cookie
         logger.info(f"Using cookie file: {cookie}")

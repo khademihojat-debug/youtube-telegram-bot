@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # httpx لاگ می‌کنه URL کامل هر درخواست رو که شامل توکن ربات می‌شه (مثلاً
 # https://api.telegram.org/bot<TOKEN>/getUpdates). سطحش رو بالا می‌بریم تا
 # توکن توی لاگ‌های سرور افشا نشه؛ خطاهای واقعی httpx همچنان نمایش داده می‌شن.
-# logging.getLogger("httpx").setLevel(logging.WARNING)  # موقتاً برای دیباگ کامنت شده
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = Application.builder().token(BOT_TOKEN).build()
 user_data_store = {}

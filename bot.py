@@ -1,6 +1,19 @@
 import os
 import asyncio
 import logging
+
+# لاگینگ باید قبل از ایمپورت downloader.py فعال بشه، چون downloader.py موقع
+# ایمپورت (نه فقط موقع اجرا) یه پیام INFO درباره‌ی نوشتن فایل کوکی چاپ می‌کنه.
+# اگه basicConfig بعد از ایمپورت صدا زده بشه، اون پیام بی‌صدا حذف می‌شه چون
+# سطح پیش‌فرض لاگ روی WARNING هست.
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# httpx لاگ می‌کنه URL کامل هر درخواست رو که شامل توکن ربات می‌شه (مثلاً
+# https://api.telegram.org/bot<TOKEN>/getUpdates). سطحش رو بالا می‌بریم تا
+# توکن توی لاگ‌های سرور افشا نشه؛ خطاهای واقعی httpx همچنان نمایش داده می‌شن.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from downloader import get_available_qualities, download_video, download_audio, is_playlist
@@ -19,14 +32,6 @@ if not BOT_TOKEN:
 
 MAX_DAILY = int(os.environ.get("MAX_DAILY_DOWNLOADS", 15))
 TELEGRAM_FILE_LIMIT = int(os.environ.get("TELEGRAM_FILE_LIMIT_MB", 50)) * 1024 * 1024  # 50 MB
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# httpx لاگ می‌کنه URL کامل هر درخواست رو که شامل توکن ربات می‌شه (مثلاً
-# https://api.telegram.org/bot<TOKEN>/getUpdates). سطحش رو بالا می‌بریم تا
-# توکن توی لاگ‌های سرور افشا نشه؛ خطاهای واقعی httpx همچنان نمایش داده می‌شن.
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = Application.builder().token(BOT_TOKEN).build()
 user_data_store = {}

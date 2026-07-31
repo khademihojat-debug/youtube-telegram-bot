@@ -15,6 +15,12 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # مثال: https://your-cobalt-instance.up.railway.app
 COBALT_API_URL = os.environ.get("COBALT_API_URL", "").rstrip("/")
 
+# چون Cobalt یه دامنه‌ی عمومی داره، هرکسی که آدرسش رو پیدا کنه می‌تونه ازش
+# استفاده کنه و هزینه/منابع سرور شما رو مصرف کنه. اگه روی سرویس Cobalt
+# متغیر API_AUTH_API_KEY رو ست کرده باشید، همون مقدار رو اینجا هم بذارید تا
+# درخواست‌ها احراز هویت بشن.
+COBALT_API_KEY = os.environ.get("COBALT_API_KEY", "").strip()
+
 # Cobalt برخلاف yt-dlp نیازی نداره که برای هر لینک لیست کیفیت‌های واقعی رو
 # استخراج کنیم — فقط کیفیت دلخواه رو می‌گیره و اگه موجود نباشه نزدیک‌ترین رو
 # برمی‌گردونه. پس یه لیست ثابت کافیه.
@@ -35,10 +41,14 @@ def _cobalt_request(payload: dict) -> dict:
             "Environment Variables ست کنید"
         )
 
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if COBALT_API_KEY:
+        headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
+
     resp = requests.post(
         COBALT_API_URL + "/",
         json=payload,
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers=headers,
         timeout=30,
     )
     data = resp.json()

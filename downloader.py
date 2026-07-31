@@ -1,228 +1,96 @@
 import os
+import time
 import asyncio
 import inspect
 import logging
-import yt_dlp
+import requests
 from typing import Dict, Optional, Tuple
-import time
 
 logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = os.path.join(os.environ.get("DATA_DIR", "./data"), "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-COOKIE_FILE = os.environ.get("COOKIE_FILE")
+# آدرس اینستنس خودتون از Cobalt (بدون / در انتها) — باید در Railway ست بشه.
+# مثال: https://your-cobalt-instance.up.railway.app
+COBALT_API_URL = os.environ.get("COBALT_API_URL", "").rstrip("/")
 
-# Alternative to COOKIE_FILE: paste the raw contents of cookies.txt directly
-# into a normal environment variable (useful on hosts/plans where the
-# "Secret Files" upload feature isn't available). If set, we write it to a
-# local file once at startup and use that.
-COOKIES_CONTENT = os.environ.get("COOKIES_CONTENT")
-_COOKIES_CONTENT_PATH = os.path.join(DOWNLOAD_DIR, "..", "cookies_from_env.txt")
-
-if COOKIES_CONTENT:
-    try:
-        _COOKIES_CONTENT_PATH = os.path.abspath(_COOKIES_CONTENT_PATH)
-        with open(_COOKIES_CONTENT_PATH, "w", encoding="utf-8") as f:
-            f.write(COOKIES_CONTENT)
-        logger.info(f"Wrote cookies from COOKIES_CONTENT env var to {_COOKIES_CONTENT_PATH}")
-    except Exception as e:
-        logger.error(f"Failed to write COOKIES_CONTENT to file: {e}")
-        _COOKIES_CONTENT_PATH = None
-
-# player clients to try — android/ios often bypass the "sign in to confirm
-# you're not a bot" block that hits plain "web" requests from datacenter IPs
-YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
+# Cobalt برخلاف yt-dlp نیازی نداره که برای هر لینک لیست کیفیت‌های واقعی رو
+# استخراج کنیم — فقط کیفیت دلخواه رو می‌گیره و اگه موجود نباشه نزدیک‌ترین رو
+# برمی‌گردونه. پس یه لیست ثابت کافیه.
+QUALITY_OPTIONS = {
+    "2160p": "2160",
+    "1440p": "1440",
+    "1080p": "1080",
+    "720p": "720",
+    "480p": "480",
+    "360p": "360",
+}
 
 
-def get_cookie_file() -> Optional[str]:
-    # Priority 1: explicit file path (e.g. a Render Secret File)
-    if COOKIE_FILE and os.path.exists(COOKIE_FILE):
-        return COOKIE_FILE
-    # Priority 2: cookie content pasted into a plain env var
-    if COOKIES_CONTENT and _COOKIES_CONTENT_PATH and os.path.exists(_COOKIES_CONTENT_PATH):
-        return _COOKIES_CONTENT_PATH
-    return None
+def _cobalt_request(payload: dict) -> dict:
+    if not COBALT_API_URL:
+        raise Exception(
+            "COBALT_API_URL تنظیم نشده — آدرس اینستنس Cobalt خودتون رو در "
+            "Environment Variables ست کنید"
+        )
+
+    resp = requests.post(
+        COBALT_API_URL + "/",
+        json=payload,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        timeout=30,
+    )
+    data = resp.json()
+
+    if data.get("status") == "error":
+        code = data.get("error", {}).get("code", "unknown")
+        raise Exception(f"Cobalt error: {code}")
+
+    return data
 
 
-def _base_opts() -> dict:
-    cookie = get_cookie_file()
-
-    # نکته‌ی مهم: از اوایل ۲۰۲۶ یوتیوب «SABR streaming» رو برای کلاینت‌های
-    # web و tv معمولی اجباری کرده و دیگه URL مستقیم نمی‌دن (باعث خطای
-    # «Requested format is not available» می‌شه). طبق گزارش‌های اخیر
-    # جامعه‌ی yt-dlp، وقتی کوکی لاگین‌شده داریم، کلاینت tv_downgraded هنوز
-    # از این محدودیت مصونه و URL مستقیم می‌ده.
-    player_clients = ["tv_downgraded", "web"] if cookie else YOUTUBE_PLAYER_CLIENTS
-
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        # NOTE: ignoreerrors is intentionally OFF. With it on, yt-dlp
-        # swallows the real failure (bot-check, 403, etc.) and just
-        # returns None, which is why you were seeing the generic
-        # "Could not extract video info" message instead of the real cause.
-        "ignoreerrors": False,
-        "extractor_args": {
-            "youtube": {
-                "player_client": player_clients,
-            }
-        },
-    }
-    if cookie:
-        opts["cookiefile"] = cookie
-        logger.info(f"Using cookie file: {cookie}")
-    else:
-        logger.warning("No cookie file found — requests will be sent without login")
-    return opts
+def _report_progress(progress_callback, percent: int):
+    if not progress_callback:
+        return
+    result = progress_callback(percent)
+    if inspect.isawaitable(result):
+        try:
+            asyncio.run(result)
+        except RuntimeError:
+            pass
 
 
-class ProgressHook:
-    def __init__(self, progress_callback):
-        self.progress_callback = progress_callback
-        self.last_update = 0
+def _download_stream(url: str, dest_path: str, progress_callback=None):
+    with requests.get(url, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        total = r.headers.get("Content-Length") or r.headers.get("Estimated-Content-Length")
+        total = int(total) if total else None
+        downloaded = 0
+        last_update = 0.0
 
-    def __call__(self, data):
-        if data.get("status") != "downloading" or not self.progress_callback:
-            return
-
-        downloaded = data.get("downloaded_bytes", 0)
-        total = data.get("total_bytes") or data.get("total_bytes_estimate")
-        percent = int((downloaded / total) * 100) if total else 0
-
-        now = time.time()
-        if now - self.last_update <= 1 and percent < 100:
-            return
-
-        self.last_update = now
-        result = self.progress_callback(percent)
-
-        if inspect.isawaitable(result):
-            try:
-                asyncio.run(result)
-            except RuntimeError:
-                pass
+        with open(dest_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    percent = int(downloaded / total * 100)
+                    now = time.time()
+                    if now - last_update > 1 or percent >= 100:
+                        last_update = now
+                        _report_progress(progress_callback, percent)
 
 
 def get_available_qualities(link: str) -> Dict[str, str]:
-    ydl_opts = _base_opts()
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=False)
-
-            if info is None:
-                logger.error(f"extract_info returned None for link: {link}")
-                return {"best": "best"}
-
-            if "entries" in info:
-                info = info["entries"][0]
-                if info is None:
-                    return {"best": "best"}
-
-            formats = info.get("formats", [])
-            qualities = {}
-
-            for fmt in formats:
-                height = fmt.get("height")
-                if not height or fmt.get("vcodec") == "none":
-                    continue
-
-                label = f"{height}p"
-                # ارتفاع (height) رو ذخیره می‌کنیم، نه format_id ثابت — چون
-                # yt-dlp بین کلاینت‌های مختلف (android/web) می‌چرخه و ممکنه
-                # همون format_id توی درخواست دانلود دیگه وجود نداشته باشه.
-                # ارتفاع همیشه پایدار و قابل‌اعتمادتره.
-                qualities.setdefault(label, str(height))
-
-            def sort_key(item):
-                label = item[0]
-                try:
-                    return int(label.rstrip("p"))
-                except ValueError:
-                    return 0
-
-            sorted_qualities = dict(
-                sorted(qualities.items(), key=sort_key, reverse=True)
-            )
-
-            return sorted_qualities if sorted_qualities else {"best": "best"}
-
-    except Exception as e:
-        # Log the REAL reason (bot-check, 403, private video, etc.) instead
-        # of silently hiding it. Check your server logs when this happens.
-        logger.error(f"get_available_qualities failed for {link}: {e}")
-        return {"best": "best"}
+    return QUALITY_OPTIONS
 
 
-def _build_format_string(quality: str) -> str:
-    if quality == "best":
-        return "bestvideo+bestaudio/best"
-    if quality == "18":
-        # فرمت ۱۸ یه format_id واقعیه (نه ارتفاع) — پروگرسیو، ویدیو+صدا در یه
-        # فایل، معمولاً از محدودیت SABR در امانه.
-        return "18/best"
-    # quality اینجا یه عدد ارتفاع (مثل "1080") هست، نه format_id — این
-    # selector همیشه بهترین فرمت موجود در همون ارتفاع رو انتخاب می‌کنه،
-    # صرف‌نظر از اینکه کدوم player client جواب داده.
-    return f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best[height<={quality}]"
-
-
-def _attempt_download(link: str, quality: str, progress_callback=None) -> Tuple[str, Optional[str]]:
-    """یه تلاش واحد برای دانلود با یه format مشخص. بدون هیچ fallback داخلی —
-    اگه شکست بخوره، Exception رو raise می‌کنه تا caller تصمیم بگیره."""
-    fmt = _build_format_string(quality)
-
-    ydl_opts = _base_opts()
-    ydl_opts.update({
-        "format": fmt,
-        "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "writethumbnail": True,
-    })
-
-    if progress_callback:
-        ydl_opts["progress_hooks"] = [ProgressHook(progress_callback)]
-
-    cookie = get_cookie_file()
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(link, download=True)
-        if info is None:
-            raise Exception("Could not extract video info")
-
-        filename = ydl.prepare_filename(info)
-        if not filename.endswith(".mp4"):
-            base = os.path.splitext(filename)[0]
-            if os.path.exists(base + ".mp4"):
-                filename = base + ".mp4"
-
-        thumb = None
-        if info.get("thumbnails"):
-            try:
-                ydl_opts_thumb = {
-                    "quiet": True,
-                    "no_warnings": True,
-                    "skip_download": True,
-                    "writethumbnail": True,
-                    "outtmpl": os.path.splitext(filename)[0],
-                }
-
-                if cookie:
-                    ydl_opts_thumb["cookiefile"] = cookie
-
-                with yt_dlp.YoutubeDL(ydl_opts_thumb) as ydl_thumb:
-                    ydl_thumb.download([link])
-
-                for ext in [".jpg", ".jpeg", ".png", ".webp"]:
-                    test_path = os.path.splitext(filename)[0] + ext
-                    if os.path.exists(test_path):
-                        thumb = test_path
-                        break
-            except Exception:
-                pass
-
-        return filename, thumb
+def is_playlist(link: str) -> bool:
+    # Cobalt از پلی‌لیست پشتیبانی نمی‌کنه؛ همیشه به‌عنوان یه ویدیوی تکی
+    # پردازش می‌شه (که با محدودیت فعلی ربات هم‌خونی داره).
+    return False
 
 
 def _download_video_sync(
@@ -230,23 +98,39 @@ def _download_video_sync(
     quality: str,
     progress_callback=None
 ) -> Tuple[str, Optional[str]]:
-    # ترتیب تلاش‌ها: اول کیفیت درخواستی، بعد best، بعد فرمت ۱۸ (progressive،
-    # مقاوم در برابر SABR) به‌عنوان آخرین راه‌چاره. هر کدوم فقط یه‌بار امتحان
-    # می‌شه — بدون recursion و بدون امکان حلقه‌ی بی‌نهایت.
-    attempts = []
-    for q in (quality, "best", "18"):
-        if q not in attempts:
-            attempts.append(q)
+    video_quality = "max" if quality == "best" else quality
 
-    last_error = None
-    for attempt_quality in attempts:
-        try:
-            return _attempt_download(link, attempt_quality, progress_callback)
-        except Exception as e:
-            last_error = e
-            logger.error(f"_download_video_sync failed for {link} (quality={attempt_quality}): {e}")
+    data = _cobalt_request({
+        "url": link,
+        "videoQuality": video_quality,
+        "downloadMode": "auto",
+        "filenameStyle": "basic",
+    })
 
-    raise last_error
+    status = data.get("status")
+
+    if status in ("tunnel", "redirect"):
+        file_url = data["url"]
+        filename = data.get("filename") or f"video_{int(time.time())}.mp4"
+        dest_path = os.path.join(DOWNLOAD_DIR, filename)
+        _download_stream(file_url, dest_path, progress_callback)
+        return dest_path, None
+
+    if status == "picker":
+        items = data.get("picker") or []
+        video_items = [i for i in items if i.get("type") in ("video", "gif")] or items
+        if not video_items:
+            raise Exception("هیچ آیتم قابل‌دانلودی پیدا نشد")
+        file_url = video_items[0]["url"]
+        filename = f"video_{int(time.time())}.mp4"
+        dest_path = os.path.join(DOWNLOAD_DIR, filename)
+        _download_stream(file_url, dest_path, progress_callback)
+        return dest_path, None
+
+    if status == "local-processing":
+        raise Exception("این ویدیو نیاز به پردازش محلی (remux) داره که فعلاً پشتیبانی نمی‌شه")
+
+    raise Exception(f"پاسخ غیرمنتظره از Cobalt: {status}")
 
 
 async def download_video(
@@ -258,70 +142,34 @@ async def download_video(
 
 
 def _download_audio_sync(link: str, bitrate: str = "128", progress_callback=None) -> str:
-    ydl_opts = _base_opts()
-    ydl_opts.update({
-        "format": "bestaudio/best",
-        "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": bitrate,
-        }],
+    data = _cobalt_request({
+        "url": link,
+        "downloadMode": "audio",
+        "audioBitrate": bitrate,
+        "audioFormat": "mp3",
+        "filenameStyle": "basic",
     })
 
-    if progress_callback:
-        ydl_opts["progress_hooks"] = [ProgressHook(progress_callback)]
+    status = data.get("status")
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=True)
-            if info is None:
-                raise Exception("Could not extract audio info")
+    if status in ("tunnel", "redirect"):
+        file_url = data["url"]
+        filename = data.get("filename") or f"audio_{int(time.time())}.mp3"
+        dest_path = os.path.join(DOWNLOAD_DIR, filename)
+        _download_stream(file_url, dest_path, progress_callback)
+        return dest_path
 
-            filename = ydl.prepare_filename(info)
-            filename = os.path.splitext(filename)[0] + ".mp3"
-            return filename
+    if status == "picker":
+        audio_url = data.get("audio")
+        if not audio_url:
+            raise Exception("هیچ فایل صوتی پیدا نشد")
+        filename = data.get("audioFilename") or f"audio_{int(time.time())}.mp3"
+        dest_path = os.path.join(DOWNLOAD_DIR, filename)
+        _download_stream(audio_url, dest_path, progress_callback)
+        return dest_path
 
-    except Exception as e:
-        logger.error(f"_download_audio_sync (mp3 convert) failed for {link}: {e}")
-
-        ydl_opts_no_convert = _base_opts()
-        ydl_opts_no_convert.update({
-            "format": "bestaudio/best",
-            "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
-        })
-
-        if progress_callback:
-            ydl_opts_no_convert["progress_hooks"] = [ProgressHook(progress_callback)]
-
-        with yt_dlp.YoutubeDL(ydl_opts_no_convert) as ydl:
-            info = ydl.extract_info(link, download=True)
-            if info is None:
-                raise Exception("Could not extract audio info")
-
-            filename = ydl.prepare_filename(info)
-            return filename
+    raise Exception(f"پاسخ غیرمنتظره از Cobalt: {status}")
 
 
 async def download_audio(link: str, bitrate: str = "128", progress_callback=None) -> str:
     return await asyncio.to_thread(_download_audio_sync, link, bitrate, progress_callback)
-
-
-def is_playlist(link: str) -> bool:
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,
-    }
-
-    cookie = get_cookie_file()
-    if cookie:
-        ydl_opts["cookiefile"] = cookie
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=False)
-            return bool(info and "entries" in info and len(info["entries"]) > 1)
-    except Exception as e:
-        logger.warning(f"is_playlist check failed for {link}: {e}")
-        return False

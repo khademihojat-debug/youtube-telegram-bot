@@ -48,12 +48,11 @@ def get_cookie_file() -> Optional[str]:
 def _base_opts() -> dict:
     cookie = get_cookie_file()
 
-    # نکته‌ی مهم: کلاینت android برای دور زدن بلاک «Sign in to confirm
-    # you're not a bot» خوبه، ولی وقتی کوکی معتبر (لاگین) داریم، فرمت‌های
-    # همین کلاینت android خراب/محدود می‌شن و ارور «Requested format is not
-    # available» می‌دن. پس وقتی کوکی داریم فقط از کلاینت web استفاده می‌کنیم؛
-    # کلاینت android رو فقط به‌عنوان fallback وقتی کوکی نداریم نگه می‌داریم.
-    player_clients = ["web"] if cookie else YOUTUBE_PLAYER_CLIENTS
+    # نکته‌ی مهم: یوتیوب اخیراً «SABR streaming» رو برای کلاینت web اجباری
+    # کرده که باعث میشه فرمت‌های مستقیم (URL-dar) حذف بشن و خطای
+    # «Requested format is not available» بده. کلاینت tv هنوز از این
+    # محدودیت مصون‌تره، برای همین وقتی کوکی داریم اول tv رو امتحان می‌کنیم.
+    player_clients = ["tv", "web"] if cookie else YOUTUBE_PLAYER_CLIENTS
 
     opts = {
         "quiet": True,

@@ -162,6 +162,10 @@ def _download_video_sync(
 ) -> Tuple[str, Optional[str]]:
     if quality == "best":
         fmt = "bestvideo+bestaudio/best"
+    elif quality == "18":
+        # فرمت ۱۸ یه format_id واقعیه (نه ارتفاع) — پروگرسیو، ویدیو+صدا در یه
+        # فایل، معمولاً از محدودیت SABR در امانه.
+        fmt = "18/best"
     else:
         # quality اینجا یه عدد ارتفاع (مثل "1080") هست، نه format_id — این
         # selector همیشه بهترین فرمت موجود در همون ارتفاع رو انتخاب می‌کنه،
@@ -224,6 +228,13 @@ def _download_video_sync(
         logger.error(f"_download_video_sync failed for {link} (quality={quality}): {e}")
         if quality != "best":
             return _download_video_sync(link, "best", progress_callback)
+        if quality != "18":
+            # آخرین راه‌چاره: فرمت ۱۸ (۳۶۰p، ویدیو+صدا در یه فایل واحد) یه
+            # فرمت progressive قدیمیه که بر خلاف فرمت‌های adaptive، معمولاً
+            # از محدودیت SABR یوتیوب در امان می‌مونه. کیفیتش پایینه ولی
+            # حداقل چیزی دانلود می‌شه به‌جای شکست کامل.
+            logger.warning(f"Falling back to format 18 (360p progressive) for {link}")
+            return _download_video_sync(link, "18", progress_callback)
         raise
 
 

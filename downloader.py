@@ -128,11 +128,15 @@ def _download_video_sync(
 
     if status == "picker":
         items = data.get("picker") or []
-        video_items = [i for i in items if i.get("type") in ("video", "gif")] or items
-        if not video_items:
+        if not items:
             raise Exception("هیچ آیتم قابل‌دانلودی پیدا نشد")
-        file_url = video_items[0]["url"]
-        filename = f"video_{int(time.time())}.mp4"
+        # اولویت با ویدیو، ولی اگه پست فقط عکس باشه (مثل کاروسل اینستاگرام)
+        # اولین آیتم موجود رو می‌گیریم.
+        video_items = [i for i in items if i.get("type") in ("video", "gif")]
+        chosen = video_items[0] if video_items else items[0]
+        file_url = chosen["url"]
+        ext = "mp4" if chosen.get("type") in ("video", "gif") else "jpg"
+        filename = f"media_{int(time.time())}.{ext}"
         dest_path = os.path.join(DOWNLOAD_DIR, filename)
         _download_stream(file_url, dest_path, progress_callback)
         return dest_path, None

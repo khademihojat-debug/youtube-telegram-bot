@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import logging
 
@@ -32,6 +33,32 @@ if not BOT_TOKEN:
 
 MAX_DAILY = int(os.environ.get("MAX_DAILY_DOWNLOADS", 15))
 TELEGRAM_FILE_LIMIT = int(os.environ.get("TELEGRAM_FILE_LIMIT_MB", 50)) * 1024 * 1024  # 50 MB
+
+# ========== کنترل دسترسی ==========
+# لیست سفید کاربران مجاز — یه env variable با آیدی‌های عددی تلگرام، جدا شده
+# با کاما (مثال: "123456789,987654321"). اگه خالی باشه، ربات برای همه بازه.
+_allowed_ids_raw = os.environ.get("ALLOWED_USER_IDS", "").strip()
+ALLOWED_USER_IDS = {
+    int(uid.strip()) for uid in _allowed_ids_raw.split(",") if uid.strip().isdigit()
+} if _allowed_ids_raw else None  # None یعنی محدودیتی نیست
+
+# ضد اسپم: حداقل فاصله‌ی زمانی (ثانیه) بین دو پیام متوالی از یک کاربر —
+# جدا از محدودیت روزانه‌ی دانلود، این جلوی سیل پیام/کلیک سریع رو می‌گیره.
+MIN_SECONDS_BETWEEN_MESSAGES = float(os.environ.get("MIN_SECONDS_BETWEEN_MESSAGES", 2))
+_last_action_time: dict[int, float] = {}
+
+
+def is_user_allowed(user_id: int) -> bool:
+    return ALLOWED_USER_IDS is None or user_id in ALLOWED_USER_IDS
+
+
+def is_rate_limited(user_id: int) -> bool:
+    """True یعنی کاربر داره خیلی سریع پشت‌سرهم درخواست می‌ده."""
+    now = time.monotonic()
+    last = _last_action_time.get(user_id, 0)
+    _last_action_time[user_id] = now
+    return (now - last) < MIN_SECONDS_BETWEEN_MESSAGES
+
 
 app = Application.builder().token(BOT_TOKEN).build()
 user_data_store = {}
@@ -128,6 +155,12 @@ async def safe_remove_file(path: str | None):
 # ========== هندلرها ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+
+    if not is_user_allowed(user.id):
+        logger.warning(f"Access denied for user_id={user.id} (username={user.username})")
+        await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
+        return
+
     await update.message.reply_text(
         f"🎬 سلام {user.first_name}!\n"
         f"به ربات دانلود یوتیوب خوش آمدید.\n\n"
@@ -140,11 +173,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_user_allowed(update.effective_user.id):
+        await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
+        return
     await update.message.reply_text(HELP_TEXT, parse_mode='Markdown')
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not is_user_allowed(user_id):
+        await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
+        return
     count = get_daily_count(user_id)
     remain = max(0, MAX_DAILY - count)
     await update.message.reply_text(
@@ -158,10 +197,28 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
+    if not is_user_allowed(user_id):
+        logger.warning(f"Access denied for user_id={user_id}")
+        await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
+        return
+
+    if is_rate_limited(user_id):
+        await update.message.reply_text("⏳ لطفاً کمی صبر کنید و دوباره امتحان کنید.")
+        return
+
     link = update.message.text.strip()
 
     if not link.startswith(("http://", "https://")):
         await update.message.reply_text("❌ لطفاً یک لینک معتبر ارسال کنید.")
+        return
+
+    # فقط لینک‌های یوتیوب رو قبول می‌کنیم — جلوی سوءاستفاده از ربات به عنوان
+    # یه دانلودر عمومی برای هر سایتی رو می‌گیره (که می‌تونه هزینه‌ی سرور
+    # Cobalt رو ببره بالا یا برای مقاصد ناخواسته استفاده بشه).
+    allowed_domains = ("youtube.com", "youtu.be", "m.youtube.com", "music.youtube.com")
+    if not any(domain in link for domain in allowed_domains):
+        await update.message.reply_text("❌ فقط لینک‌های یوتیوب پشتیبانی می‌شن.")
         return
 
     count = get_daily_count(user_id)
@@ -217,6 +274,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if not is_user_allowed(query.from_user.id):
+        logger.warning(f"Access denied for user_id={query.from_user.id} (callback)")
+        await query.edit_message_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
+        return
 
     if query.data == "help":
         await query.edit_message_text(HELP_TEXT, parse_mode='Markdown')

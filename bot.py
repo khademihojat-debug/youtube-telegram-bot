@@ -123,6 +123,40 @@ HELP_TEXT = """
 🆘 **پشتیبانی:** /support
 """.format(MAX_DAILY)
 
+MAIN_MENU_TEXT = """
+🎬 **به ربات دانلود خوش آمدید!**
+
+📌 لینک یوتیوب، اینستاگرام یا تیک‌تاک را بفرستید تا دانلود کنم.
+
+**🆓 پلن رایگان (مهمان)**
+• {} دانلود در روز
+
+**💎 پلن VIP**
+• دانلود نامحدود
+• بدون تبلیغات
+• فعال‌سازی فوری بعد از پرداخت
+""".format(MAX_DAILY)
+
+
+def main_menu_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 راهنما", callback_data="help")],
+        [InlineKeyboardButton("📊 وضعیت امروز", callback_data="status")],
+        [InlineKeyboardButton("💎 خرید VIP", callback_data="vip_info")],
+        [InlineKeyboardButton("🆘 پشتیبانی", callback_data="support")],
+    ])
+
+
+def back_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]])
+
+
+def with_back_button(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
+    """یه ردیف «بازگشت» رو به پایین یه کیبورد موجود اضافه می‌کنه."""
+    rows = list(markup.inline_keyboard) if markup else []
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
+    return InlineKeyboardMarkup(rows)
+
 
 # ========== توابع کمکی ==========
 def generate_uid(update: Update) -> str:
@@ -216,15 +250,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        f"🎬 سلام {user.first_name}!\n"
-        f"به ربات دانلود خوش آمدید.\n\n"
-        f"📌 لینک یوتیوب، اینستاگرام یا تیک‌تاک را بفرستید تا دانلود کنم.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📖 راهنما", callback_data="help")],
-            [InlineKeyboardButton("📊 وضعیت امروز", callback_data="status")],
-            [InlineKeyboardButton("💎 خرید VIP", callback_data="vip_info")],
-            [InlineKeyboardButton("🆘 پشتیبانی", callback_data="support")],
-        ])
+        MAIN_MENU_TEXT,
+        reply_markup=main_menu_markup(),
+        parse_mode='Markdown'
     )
 
 
@@ -232,7 +260,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_user_allowed(update.effective_user.id):
         await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
         return
-    await update.message.reply_text(HELP_TEXT, parse_mode='Markdown')
+    await update.message.reply_text(HELP_TEXT, reply_markup=back_markup(), parse_mode='Markdown')
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,7 +268,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_user_allowed(user_id):
         await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
         return
-    await update.message.reply_text(build_status_text(user_id), parse_mode='Markdown')
+    await update.message.reply_text(build_status_text(user_id), reply_markup=back_markup(), parse_mode='Markdown')
 
 
 async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,13 +277,14 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = f"🆘 برای پشتیبانی به {SUPPORT_USERNAME} پیام بدید." if SUPPORT_USERNAME else "🆘 پشتیبانی هنوز تنظیم نشده."
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=back_markup())
 
 
 def _vip_payment_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"⭐ پرداخت با Stars ({VIP_PRICE_STARS})", callback_data="pay_stars")],
         [InlineKeyboardButton(f"💳 کارت‌به‌کارت ({VIP_PRICE_RIAL:,} ریال)", callback_data="pay_rial")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
     ])
 
 
@@ -321,6 +350,7 @@ async def start_card_payment(query, context: ContextTypes.DEFAULT_TYPE):
         f"شماره کارت: `{CARD_NUMBER}`\n"
         f"به نام: {CARD_HOLDER_NAME or '-'}\n\n"
         f"بعد از واریز، لطفاً **عکس رسید** رو همین‌جا بفرستید تا VIP‌تون فعال بشه.",
+        reply_markup=back_markup(),
         parse_mode='Markdown'
     )
 
@@ -483,21 +513,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
         return
 
+    if query.data == "back_main":
+        try:
+            await query.edit_message_text(MAIN_MENU_TEXT, reply_markup=main_menu_markup(), parse_mode='Markdown')
+        except Exception:
+            await query.message.reply_text(MAIN_MENU_TEXT, reply_markup=main_menu_markup(), parse_mode='Markdown')
+        return
+
     if query.data == "help":
-        await query.edit_message_text(HELP_TEXT, parse_mode='Markdown')
+        await query.edit_message_text(HELP_TEXT, reply_markup=back_markup(), parse_mode='Markdown')
         return
 
     if query.data == "status":
-        await query.edit_message_text(build_status_text(query.from_user.id), parse_mode='Markdown')
+        await query.edit_message_text(build_status_text(query.from_user.id), reply_markup=back_markup(), parse_mode='Markdown')
         return
 
     if query.data == "support":
         text = f"🆘 برای پشتیبانی به {SUPPORT_USERNAME} پیام بدید." if SUPPORT_USERNAME else "🆘 پشتیبانی هنوز تنظیم نشده."
-        await query.message.reply_text(text)
+        await query.edit_message_text(text, reply_markup=back_markup())
         return
 
     if query.data == "vip_info":
-        await query.message.reply_text(
+        await query.edit_message_text(
             f"💎 **اشتراک VIP** ({VIP_DURATION_DAYS} روز)\n\nروش پرداخت رو انتخاب کنید:",
             reply_markup=_vip_payment_keyboard(),
             parse_mode='Markdown'

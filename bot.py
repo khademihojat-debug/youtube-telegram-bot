@@ -15,8 +15,16 @@ logger = logging.getLogger(__name__)
 # توکن توی لاگ‌های سرور افشا نشه؛ خطاهای واقعی httpx همچنان نمایش داده می‌شن.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    PreCheckoutQueryHandler,
+    filters,
+    ContextTypes,
+)
 from downloader import get_available_qualities, download_video, download_audio, is_playlist
 from database import (
     init_db,
@@ -24,6 +32,9 @@ from database import (
     try_acquire_download_slot,
     release_download_slot,
     save_history,
+    is_vip,
+    get_vip_expiry,
+    grant_vip,
 )
 
 # ========== تنظیمات ==========
@@ -60,6 +71,20 @@ def is_rate_limited(user_id: int) -> bool:
     return (now - last) < MIN_SECONDS_BETWEEN_MESSAGES
 
 
+# ========== VIP و کسب درآمد ==========
+# قیمت اشتراک VIP به Telegram Stars (واحد پول داخلی تلگرام — نیازی به درگاه
+# پرداخت جدا نداره و مستقیم توی API پشتیبانی می‌شه).
+VIP_PRICE_STARS = int(os.environ.get("VIP_PRICE_STARS", 50))
+VIP_DURATION_DAYS = int(os.environ.get("VIP_DURATION_DAYS", 30))
+
+# تبلیغات قبل از ارسال فایل — برای کاربرهای غیر VIP نمایش داده می‌شه.
+AD_ENABLED = os.environ.get("AD_ENABLED", "true").lower() == "true"
+AD_TEXT = os.environ.get(
+    "AD_TEXT",
+    "📢 این پیام یک تبلیغ نمونه است.\nبرای حذف تبلیغات، اشتراک VIP تهیه کنید: /vip"
+)
+
+
 app = Application.builder().token(BOT_TOKEN).build()
 user_data_store = {}
 
@@ -77,12 +102,15 @@ HELP_TEXT = """
 • ارسال **تام‌نیل** همراه ویدیو
 • نمایش درصد پیشرفت دانلود
 • مدیریت حجم فایل (آپلود در Pixeldrain برای فایل‌های بزرگ)
-• محدودیت روزانه ({} بار در روز)
+• محدودیت روزانه ({} بار در روز — کاربران VIP نامحدود)
 
 📖 **چطور استفاده کنم؟**
 ۱. لینک ویدیو را بفرستید.
 ۲. کیفیت مورد نظر را انتخاب کنید.
 ۳. منتظر دانلود و ارسال فایل باشید.
+
+💎 **اشتراک VIP:**
+با /vip می‌تونید محدودیت روزانه و تبلیغات رو حذف کنید.
 
 ℹ️ **نکته:**
 دانلود کامل پلی‌لیست هنوز پیاده‌سازی نشده است.
@@ -167,7 +195,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 لینک ویدیو را بفرستید تا دانلود کنم.",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📖 راهنما", callback_data="help")],
-            [InlineKeyboardButton("📊 وضعیت امروز", callback_data="status")]
+            [InlineKeyboardButton("📊 وضعیت امروز", callback_data="status")],
+            [InlineKeyboardButton("💎 خرید VIP", callback_data="vip_info")],
         ])
     )
 
@@ -179,19 +208,86 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_TEXT, parse_mode='Markdown')
 
 
+def build_status_text(user_id: int) -> str:
+    if is_vip(user_id):
+        expiry = get_vip_expiry(user_id)
+        expiry_str = expiry.strftime("%Y-%m-%d") if expiry else "-"
+        return (
+            f"📊 **وضعیت شما**\n\n"
+            f"💎 اشتراک VIP فعال (بدون محدودیت)\n"
+            f"📅 انقضا: {expiry_str}"
+        )
+
+    count = get_daily_count(user_id)
+    remain = max(0, MAX_DAILY - count)
+    return (
+        f"📊 **وضعیت دانلود امروز**\n\n"
+        f"✅ استفاده شده: {count}\n"
+        f"🔰 باقی‌مانده: {remain}\n"
+        f"📌 سقف روزانه: {MAX_DAILY}\n\n"
+        f"💎 برای حذف محدودیت: /vip"
+    )
+
+
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_user_allowed(user_id):
         await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
         return
-    count = get_daily_count(user_id)
-    remain = max(0, MAX_DAILY - count)
-    await update.message.reply_text(
-        f"📊 **وضعیت دانلود امروز**\n\n"
-        f"✅ استفاده شده: {count}\n"
-        f"🔰 باقی‌مانده: {remain}\n"
-        f"📌 سقف روزانه: {MAX_DAILY}",
+    await update.message.reply_text(build_status_text(user_id), parse_mode='Markdown')
+
+
+async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_user_allowed(user_id):
+        await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
+        return
+
+    if is_vip(user_id):
+        expiry = get_vip_expiry(user_id)
+        expiry_str = expiry.strftime("%Y-%m-%d") if expiry else "-"
+        await update.message.reply_text(
+            f"💎 شما همین الان اشتراک VIP فعال دارید (تا {expiry_str}).\n"
+            f"می‌تونید دوباره خرید کنید تا تمدید بشه."
+        )
+
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title="اشتراک VIP",
+        description=f"حذف محدودیت روزانه دانلود و تبلیغات به مدت {VIP_DURATION_DAYS} روز",
+        payload=f"vip_{user_id}_{int(time.time())}",
+        provider_token="",  # برای Telegram Stars همیشه خالیه
+        currency="XTR",
+        prices=[LabeledPrice(f"VIP {VIP_DURATION_DAYS} روزه", VIP_PRICE_STARS)],
+    )
+
+
+async def vip_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.message.reply_text(
+        f"💎 **اشتراک VIP**\n\n"
+        f"• حذف کامل محدودیت روزانه دانلود\n"
+        f"• حذف تبلیغات\n"
+        f"• قیمت: {VIP_PRICE_STARS} Stars برای {VIP_DURATION_DAYS} روز\n\n"
+        f"برای خرید: /vip",
         parse_mode='Markdown'
+    )
+
+
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    # اینجا می‌تونید payload رو اعتبارسنجی کنید؛ فعلاً همیشه تأیید می‌کنیم.
+    await query.answer(ok=True)
+
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    expiry = grant_vip(user_id, VIP_DURATION_DAYS)
+    logger.info(f"VIP granted to user_id={user_id} until {expiry}")
+    await update.message.reply_text(
+        f"✅ پرداخت موفق بود!\n"
+        f"💎 اشتراک VIP شما تا {expiry.strftime('%Y-%m-%d')} فعال شد.\n"
+        f"از این به بعد بدون محدودیت روزانه و بدون تبلیغ دانلود می‌کنید."
     )
 
 
@@ -221,15 +317,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ فقط لینک‌های یوتیوب پشتیبانی می‌شن.")
         return
 
-    count = get_daily_count(user_id)
-    if count >= MAX_DAILY:
-        await update.message.reply_text(
-            f"❌ **محدودیت روزانه شما تمام شده!**\n"
-            f"شما امروز {MAX_DAILY} بار دانلود کرده‌اید.\n"
-            f"از فردا دوباره امتحان کنید.",
-            parse_mode='Markdown'
-        )
-        return
+    user_is_vip = is_vip(user_id)
+
+    if not user_is_vip:
+        count = get_daily_count(user_id)
+        if count >= MAX_DAILY:
+            await update.message.reply_text(
+                f"❌ **محدودیت روزانه شما تمام شده!**\n"
+                f"شما امروز {MAX_DAILY} بار دانلود کرده‌اید.\n"
+                f"از فردا دوباره امتحان کنید یا با /vip نامحدود بشید.",
+                parse_mode='Markdown'
+            )
+            return
 
     is_pl = is_playlist(link)
     msg = await update.message.reply_text(
@@ -285,16 +384,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "status":
-        user_id = query.from_user.id
-        count = get_daily_count(user_id)
-        remain = max(0, MAX_DAILY - count)
-        await query.edit_message_text(
-            f"📊 **وضعیت دانلود امروز**\n\n"
-            f"✅ استفاده شده: {count}\n"
-            f"🔰 باقی‌مانده: {remain}\n"
-            f"📌 سقف روزانه: {MAX_DAILY}",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text(build_status_text(query.from_user.id), parse_mode='Markdown')
+        return
+
+    if query.data == "vip_info":
+        await vip_info_callback(update, context)
         return
 
     try:
@@ -318,18 +412,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         link = user_data_store[uid]["link"]
         quality = parts[2]
+        user_id = query.from_user.id
+        user_is_vip = is_vip(user_id)
 
-        ok, current_count = try_acquire_download_slot(query.from_user.id, MAX_DAILY)
-        if not ok:
-            await query.edit_message_text(
-                f"❌ **محدودیت روزانه شما تمام شده!**\n"
-                f"شما امروز {current_count} بار دانلود کرده‌اید.\n"
-                f"از فردا دوباره امتحان کنید.",
-                parse_mode='Markdown'
-            )
-            return
+        reserved_slot = False
+        if not user_is_vip:
+            ok, current_count = try_acquire_download_slot(user_id, MAX_DAILY)
+            if not ok:
+                await query.edit_message_text(
+                    f"❌ **محدودیت روزانه شما تمام شده!**\n"
+                    f"شما امروز {current_count} بار دانلود کرده‌اید.\n"
+                    f"از فردا دوباره امتحان کنید یا با /vip نامحدود بشید.",
+                    parse_mode='Markdown'
+                )
+                return
+            reserved_slot = True
 
-        reserved_slot = True
         filename = None
         thumb = None
         progress_msg = None
@@ -371,6 +469,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_delete_message(progress_msg)
             progress_msg = None
 
+            # نمایش تبلیغ قبل از ارسال فایل — فقط برای کاربرهای غیر VIP
+            if AD_ENABLED and not user_is_vip:
+                try:
+                    await context.bot.send_message(chat_id=query.message.chat_id, text=AD_TEXT)
+                except Exception as e:
+                    logger.warning(f"failed to send ad: {e}")
+
             await send_large_file(
                 context.bot,
                 query.message.chat_id,
@@ -381,7 +486,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_successfully = True
 
             try:
-                save_history(query.from_user.id, link, quality, os.path.basename(filename))
+                save_history(user_id, link, quality, os.path.basename(filename))
             except Exception as e:
                 logger.warning(f"save_history failed: {e}")
 
@@ -391,7 +496,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"download error: {e}")
             if reserved_slot and not sent_successfully:
                 try:
-                    release_download_slot(query.from_user.id)
+                    release_download_slot(user_id)
                     reserved_slot = False
                 except Exception as release_error:
                     logger.warning(f"release_download_slot failed: {release_error}")
@@ -411,6 +516,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("help", help_command))
 app.add_handler(CommandHandler("status", status_command))
+app.add_handler(CommandHandler("vip", vip_command))
+app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 app.add_handler(CallbackQueryHandler(callback_handler))
 

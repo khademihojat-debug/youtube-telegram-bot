@@ -48,11 +48,12 @@ def get_cookie_file() -> Optional[str]:
 def _base_opts() -> dict:
     cookie = get_cookie_file()
 
-    # نکته‌ی مهم: یوتیوب اخیراً «SABR streaming» رو برای کلاینت web اجباری
-    # کرده که باعث میشه فرمت‌های مستقیم (URL-dar) حذف بشن و خطای
-    # «Requested format is not available» بده. کلاینت tv هنوز از این
-    # محدودیت مصون‌تره، برای همین وقتی کوکی داریم اول tv رو امتحان می‌کنیم.
-    player_clients = ["tv", "web"] if cookie else YOUTUBE_PLAYER_CLIENTS
+    # نکته‌ی مهم: از اوایل ۲۰۲۶ یوتیوب «SABR streaming» رو برای کلاینت‌های
+    # web و tv معمولی اجباری کرده و دیگه URL مستقیم نمی‌دن (باعث خطای
+    # «Requested format is not available» می‌شه). طبق گزارش‌های اخیر
+    # جامعه‌ی yt-dlp، وقتی کوکی لاگین‌شده داریم، کلاینت tv_downgraded هنوز
+    # از این محدودیت مصونه و URL مستقیم می‌ده.
+    player_clients = ["tv_downgraded", "web"] if cookie else YOUTUBE_PLAYER_CLIENTS
 
     opts = {
         "quiet": True,

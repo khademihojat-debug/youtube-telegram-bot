@@ -34,6 +34,16 @@ def init_db():
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            authority TEXT PRIMARY KEY,
+            user_id INTEGER,
+            amount INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT
+        )
+    """)
+
     # اگه دیتابیس قدیمی‌تر بدون ستون vip_until باشه، اضافه‌اش می‌کنیم
     c.execute("PRAGMA table_info(users)")
     columns = [row[1] for row in c.fetchall()]
@@ -219,3 +229,50 @@ def grant_vip(user_id: int, days: int):
     conn.commit()
     conn.close()
     return new_expiry
+
+
+# ========== پرداخت‌های ریالی (زرین‌پال) ==========
+
+def init_payments_table():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            authority TEXT PRIMARY KEY,
+            user_id INTEGER,
+            amount INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def create_payment_record(authority: str, user_id: int, amount: int):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR REPLACE INTO payments (authority, user_id, amount, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (authority, user_id, amount, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_payment(authority: str):
+    """برمی‌گردونه (user_id, amount, status) یا None"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT user_id, amount, status FROM payments WHERE authority = ?", (authority,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+
+def mark_payment_verified(authority: str):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("UPDATE payments SET status = 'verified' WHERE authority = ?", (authority,))
+    conn.commit()
+    conn.close()

@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = os.environ.get("DB_PATH", "./data/data.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -18,7 +18,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             daily_count INTEGER DEFAULT 0,
-            last_reset TEXT
+            last_reset TEXT,
+            vip_until TEXT
         )
     """)
 
@@ -32,6 +33,12 @@ def init_db():
             date TEXT
         )
     """)
+
+    # اگه دیتابیس قدیمی‌تر بدون ستون vip_until باشه، اضافه‌اش می‌کنیم
+    c.execute("PRAGMA table_info(users)")
+    columns = [row[1] for row in c.fetchall()]
+    if "vip_until" not in columns:
+        c.execute("ALTER TABLE users ADD COLUMN vip_until TEXT")
 
     conn.commit()
     conn.close()
@@ -137,3 +144,78 @@ def save_history(user_id: int, link: str, quality: str, filename: str):
 
     conn.commit()
     conn.close()
+
+
+# ========== VIP ==========
+
+def is_vip(user_id: int) -> bool:
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT vip_until FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if row is None or row[0] is None:
+        return False
+
+    try:
+        vip_until = datetime.fromisoformat(row[0])
+    except ValueError:
+        return False
+
+    return datetime.now() < vip_until
+
+
+def get_vip_expiry(user_id: int):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT vip_until FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if row is None or row[0] is None:
+        return None
+
+    try:
+        return datetime.fromisoformat(row[0])
+    except ValueError:
+        return None
+
+
+def grant_vip(user_id: int, days: int):
+    """VIP رو از الان یا از تاریخ انقضای فعلی (هرکدوم دیرتره) به مدت `days` روز تمدید می‌کنه."""
+    conn = get_connection()
+    c = conn.cursor()
+    today = get_today()
+
+    c.execute(
+        "SELECT vip_until FROM users WHERE user_id = ?",
+        (user_id,)
+    )
+    row = c.fetchone()
+
+    now = datetime.now()
+    current_expiry = None
+    if row and row[0]:
+        try:
+            current_expiry = datetime.fromisoformat(row[0])
+        except ValueError:
+            current_expiry = None
+
+    base = current_expiry if (current_expiry and current_expiry > now) else now
+    new_expiry = base + timedelta(days=days)
+
+    if row is None:
+        c.execute(
+            "INSERT INTO users (user_id, daily_count, last_reset, vip_until) VALUES (?, 0, ?, ?)",
+            (user_id, today, new_expiry.isoformat()),
+        )
+    else:
+        c.execute(
+            "UPDATE users SET vip_until = ? WHERE user_id = ?",
+            (new_expiry.isoformat(), user_id),
+        )
+
+    conn.commit()
+    conn.close()
+    return new_expiry

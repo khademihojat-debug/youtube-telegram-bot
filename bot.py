@@ -2,14 +2,9 @@ import os
 import time
 import asyncio
 import logging
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
-
-import requests as http_requests
 
 # لاگینگ باید قبل از ایمپورت downloader.py فعال بشه، چون downloader.py موقع
-# ایمپورت (نه فقط موقع اجرا) یه پیام INFO درباره‌ی نوشتن فایل کوکی چاپ می‌کنه.
+# ایمپورت یه پیام INFO درباره‌ی نوشتن فایل کوکی چاپ می‌کنه.
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -37,9 +32,6 @@ from database import (
     is_vip,
     get_vip_expiry,
     grant_vip,
-    create_payment_record,
-    get_payment,
-    mark_payment_verified,
 )
 
 # ========== تنظیمات ==========
@@ -47,25 +39,21 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is required")
 
-# محدودیت پیش‌فرض روزانه برای کاربرهای جدید/معمولی
 MAX_DAILY = int(os.environ.get("MAX_DAILY_DOWNLOADS", 3))
 TELEGRAM_FILE_LIMIT = int(os.environ.get("TELEGRAM_FILE_LIMIT_MB", 50)) * 1024 * 1024  # 50 MB
 
 # ========== کنترل دسترسی ==========
-# لیست سفید کاربران مجاز به استفاده از ربات — اگه خالی باشه، ربات برای همه بازه.
 _allowed_ids_raw = os.environ.get("ALLOWED_USER_IDS", "").strip()
 ALLOWED_USER_IDS = {
     int(uid.strip()) for uid in _allowed_ids_raw.split(",") if uid.strip().isdigit()
 } if _allowed_ids_raw else None
 
-# آیدی‌های عددی کاربرهایی که دانلود نامحدود دارن (شما و دوستان‌تون) — جدا از
-# VIP، این‌ها همیشه نامحدودن و نیازی به پرداخت ندارن.
+# آیدی‌های عددی کاربرهایی که دانلود نامحدود دارن (شما و دوستان‌تون)
 _unlimited_ids_raw = os.environ.get("UNLIMITED_USER_IDS", "").strip()
 UNLIMITED_USER_IDS = {
     int(uid.strip()) for uid in _unlimited_ids_raw.split(",") if uid.strip().isdigit()
 }
 
-# ضد اسپم: حداقل فاصله‌ی زمانی (ثانیه) بین دو پیام متوالی از یک کاربر
 MIN_SECONDS_BETWEEN_MESSAGES = float(os.environ.get("MIN_SECONDS_BETWEEN_MESSAGES", 2))
 _last_action_time: dict[int, float] = {}
 
@@ -75,7 +63,6 @@ def is_user_allowed(user_id: int) -> bool:
 
 
 def has_unlimited_access(user_id: int) -> bool:
-    """True برای کاربرهای همیشه-نامحدود (شما/دوستان) یا کاربرهای VIP فعال."""
     return user_id in UNLIMITED_USER_IDS or is_vip(user_id)
 
 
@@ -100,130 +87,13 @@ AD_TEXT = os.environ.get(
 # ========== پشتیبانی ==========
 SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "").strip()  # مثلاً "@your_support"
 
-# ========== زرین‌پال (پرداخت ریالی خودکار) ==========
-ZARINPAL_MERCHANT_ID = os.environ.get("ZARINPAL_MERCHANT_ID", "").strip()
-# آدرس عمومی همین سرویس ربات + "/zarinpal/callback"
-# مثال: https://your-bot-service.up.railway.app/zarinpal/callback
-ZARINPAL_CALLBACK_URL = os.environ.get("ZARINPAL_CALLBACK_URL", "").strip()
-ZARINPAL_SANDBOX = os.environ.get("ZARINPAL_SANDBOX", "false").lower() == "true"
+# ========== پرداخت کارت‌به‌کارت (تأیید دستی توسط ادمین) ==========
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0) or 0)  # آیدی عددی تلگرام شما
+CARD_NUMBER = os.environ.get("CARD_NUMBER", "").strip()
+CARD_HOLDER_NAME = os.environ.get("CARD_HOLDER_NAME", "").strip()
 
-_ZP_BASE = "https://sandbox.zarinpal.com" if ZARINPAL_SANDBOX else "https://api.zarinpal.com"
-ZARINPAL_REQUEST_URL = f"{_ZP_BASE}/pg/v4/payment/request.json"
-ZARINPAL_VERIFY_URL = f"{_ZP_BASE}/pg/v4/payment/verify.json"
-_ZP_STARTPAY_BASE = "https://sandbox.zarinpal.com" if ZARINPAL_SANDBOX else "https://www.zarinpal.com"
-ZARINPAL_STARTPAY_URL = _ZP_STARTPAY_BASE + "/pg/StartPay/{}"
-
-
-def create_zarinpal_payment(user_id: int) -> str:
-    if not ZARINPAL_MERCHANT_ID or not ZARINPAL_CALLBACK_URL:
-        raise Exception("درگاه پرداخت ریالی هنوز تنظیم نشده — با پشتیبانی تماس بگیرید.")
-
-    resp = http_requests.post(ZARINPAL_REQUEST_URL, json={
-        "merchant_id": ZARINPAL_MERCHANT_ID,
-        "amount": VIP_PRICE_RIAL,
-        "callback_url": ZARINPAL_CALLBACK_URL,
-        "description": f"اشتراک VIP {VIP_DURATION_DAYS} روزه",
-    }, timeout=15)
-    data = resp.json()
-    authority = (data.get("data") or {}).get("authority")
-    if not authority:
-        raise Exception(f"خطا در ایجاد پرداخت: {data.get('errors')}")
-
-    create_payment_record(authority, user_id, VIP_PRICE_RIAL)
-    return ZARINPAL_STARTPAY_URL.format(authority)
-
-
-def _send_telegram_message_sync(chat_id: int, text: str):
-    """ارسال پیام مستقیم به تلگرام از طریق HTTP — برای استفاده از داخل ترد
-    سرور callback که به event loop اصلی ربات دسترسی نداره."""
-    try:
-        http_requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10,
-        )
-    except Exception as e:
-        logger.error(f"failed to send telegram confirmation message: {e}")
-
-
-class ZarinpalCallbackHandler(BaseHTTPRequestHandler):
-    def _respond_html(self, html: str):
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-
-        if parsed.path != "/zarinpal/callback":
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        success_html = (
-            "<html><body style='font-family:sans-serif;text-align:center;padding-top:50px'>"
-            "<h2>✅ پرداخت با موفقیت انجام شد</h2><p>می‌تونید به تلگرام برگردید.</p></body></html>"
-        )
-        fail_html = (
-            "<html><body style='font-family:sans-serif;text-align:center;padding-top:50px'>"
-            "<h2>❌ پرداخت ناموفق بود یا لغو شد</h2></body></html>"
-        )
-
-        qs = parse_qs(parsed.query)
-        authority = qs.get("Authority", [None])[0]
-        status = qs.get("Status", [None])[0]
-
-        if not authority or status != "OK":
-            self._respond_html(fail_html)
-            return
-
-        payment = get_payment(authority)
-        if payment is None:
-            self._respond_html(fail_html)
-            return
-
-        user_id, amount, current_status = payment
-
-        if current_status == "verified":
-            self._respond_html(success_html)
-            return
-
-        try:
-            resp = http_requests.post(ZARINPAL_VERIFY_URL, json={
-                "merchant_id": ZARINPAL_MERCHANT_ID,
-                "amount": amount,
-                "authority": authority,
-            }, timeout=15)
-            data = resp.json()
-            code = (data.get("data") or {}).get("code")
-        except Exception as e:
-            logger.error(f"zarinpal verify request failed: {e}")
-            code = None
-
-        if code in (100, 101):
-            mark_payment_verified(authority)
-            expiry = grant_vip(user_id, VIP_DURATION_DAYS)
-            _send_telegram_message_sync(
-                user_id,
-                f"✅ پرداخت شما تأیید شد!\n💎 اشتراک VIP تا {expiry.strftime('%Y-%m-%d')} فعال شد."
-            )
-            self._respond_html(success_html)
-        else:
-            logger.warning(f"zarinpal verify failed for authority={authority}, code={code}")
-            self._respond_html(fail_html)
-
-    def log_message(self, format, *args):
-        pass  # جلوگیری از لاگ پیش‌فرض پرحجم HTTP server
-
-
-def start_callback_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = ThreadingHTTPServer(("0.0.0.0", port), ZarinpalCallbackHandler)
-    logger.info(f"Zarinpal callback server listening on port {port}")
-    server.serve_forever()
+# کاربرهایی که الان منتظرن رسیدشون رو بفرستن (حافظه‌ی موقت، نه دیتابیس)
+_awaiting_receipt: set[int] = set()
 
 
 app = Application.builder().token(BOT_TOKEN).build()
@@ -248,7 +118,7 @@ HELP_TEXT = """
 ۳. منتظر دانلود و ارسال فایل باشید.
 
 💎 **اشتراک VIP:**
-با /vip می‌تونید محدودیت روزانه و تبلیغات رو حذف کنید (پرداخت با Stars یا ریالی).
+با /vip می‌تونید محدودیت روزانه و تبلیغات رو حذف کنید (پرداخت با Stars یا کارت‌به‌کارت).
 
 🆘 **پشتیبانی:** /support
 """.format(MAX_DAILY)
@@ -378,11 +248,15 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
         return
 
-    if SUPPORT_USERNAME:
-        text = f"🆘 برای پشتیبانی به {SUPPORT_USERNAME} پیام بدید."
-    else:
-        text = "🆘 پشتیبانی هنوز تنظیم نشده."
+    text = f"🆘 برای پشتیبانی به {SUPPORT_USERNAME} پیام بدید." if SUPPORT_USERNAME else "🆘 پشتیبانی هنوز تنظیم نشده."
     await update.message.reply_text(text)
+
+
+def _vip_payment_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"⭐ پرداخت با Stars ({VIP_PRICE_STARS})", callback_data="pay_stars")],
+        [InlineKeyboardButton(f"💳 کارت‌به‌کارت ({VIP_PRICE_RIAL:,} ریال)", callback_data="pay_rial")],
+    ])
 
 
 async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -400,14 +274,9 @@ async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expiry_str = expiry.strftime("%Y-%m-%d") if expiry else "-"
         await update.message.reply_text(f"💎 شما همین الان اشتراک VIP فعال دارید (تا {expiry_str}).")
 
-    keyboard = [
-        [InlineKeyboardButton(f"⭐ پرداخت با Stars ({VIP_PRICE_STARS})", callback_data="pay_stars")],
-        [InlineKeyboardButton(f"💳 پرداخت ریالی ({VIP_PRICE_RIAL:,} ریال)", callback_data="pay_rial")],
-    ]
     await update.message.reply_text(
-        f"💎 **اشتراک VIP** ({VIP_DURATION_DAYS} روز)\n\n"
-        f"روش پرداخت رو انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"💎 **اشتراک VIP** ({VIP_DURATION_DAYS} روز)\n\nروش پرداخت رو انتخاب کنید:",
+        reply_markup=_vip_payment_keyboard(),
         parse_mode='Markdown'
     )
 
@@ -436,6 +305,61 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         f"✅ پرداخت موفق بود!\n"
         f"💎 اشتراک VIP شما تا {expiry.strftime('%Y-%m-%d')} فعال شد."
     )
+
+
+async def start_card_payment(query, context: ContextTypes.DEFAULT_TYPE):
+    if not CARD_NUMBER:
+        await query.message.reply_text("❌ پرداخت کارت‌به‌کارت هنوز تنظیم نشده — با پشتیبانی تماس بگیرید.")
+        return
+
+    user_id = query.from_user.id
+    _awaiting_receipt.add(user_id)
+
+    await query.message.reply_text(
+        f"💳 **پرداخت کارت‌به‌کارت**\n\n"
+        f"مبلغ: **{VIP_PRICE_RIAL:,} ریال**\n"
+        f"شماره کارت: `{CARD_NUMBER}`\n"
+        f"به نام: {CARD_HOLDER_NAME or '-'}\n\n"
+        f"بعد از واریز، لطفاً **عکس رسید** رو همین‌جا بفرستید تا VIP‌تون فعال بشه.",
+        parse_mode='Markdown'
+    )
+
+
+async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id not in _awaiting_receipt:
+        return  # این عکس ربطی به رسید پرداخت نداره — نادیده می‌گیریم
+
+    if not ADMIN_ID:
+        await update.message.reply_text("❌ سیستم تأیید پرداخت هنوز تنظیم نشده — با پشتیبانی تماس بگیرید.")
+        return
+
+    _awaiting_receipt.discard(user_id)
+
+    photo = update.message.photo[-1]  # بزرگ‌ترین سایز
+    username = update.effective_user.username
+    username_str = f"@{username}" if username else "(بدون یوزرنیم)"
+
+    try:
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=photo.file_id,
+            caption=(
+                f"🧾 رسید پرداخت جدید\n"
+                f"👤 کاربر: {username_str} (`{user_id}`)\n"
+                f"💰 مبلغ: {VIP_PRICE_RIAL:,} ریال"
+            ),
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ تأیید و فعال‌سازی VIP", callback_data=f"approve_vip|{user_id}"),
+                InlineKeyboardButton("❌ رد", callback_data=f"reject_vip|{user_id}"),
+            ]])
+        )
+        await update.message.reply_text("📨 رسید شما برای بررسی ارسال شد. بعد از تأیید، VIP فعال می‌شه.")
+    except Exception as e:
+        logger.error(f"failed to forward receipt to admin: {e}")
+        await update.message.reply_text("❌ خطا در ارسال رسید. لطفاً دوباره امتحان کنید یا با پشتیبانی تماس بگیرید.")
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -522,6 +446,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # ---- تأیید/رد رسید توسط ادمین — قبل از چک whitelist عادی، چون فقط ادمین
+    # باید بتونه این دکمه‌ها رو بزنه ----
+    if query.data.startswith("approve_vip|") or query.data.startswith("reject_vip|"):
+        if not ADMIN_ID or query.from_user.id != ADMIN_ID:
+            await query.answer("⛔️ فقط ادمین می‌تونه این کار رو انجام بده.", show_alert=True)
+            return
+
+        action, target_id_str = query.data.split("|", 1)
+        target_id = int(target_id_str)
+
+        if action == "approve_vip":
+            expiry = grant_vip(target_id, VIP_DURATION_DAYS)
+            logger.info(f"VIP granted (card) to user_id={target_id} until {expiry}")
+            await query.edit_message_caption(caption=query.message.caption + "\n\n✅ تأیید شد")
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=f"✅ پرداخت شما تأیید شد!\n💎 اشتراک VIP تا {expiry.strftime('%Y-%m-%d')} فعال شد."
+                )
+            except Exception as e:
+                logger.warning(f"failed to notify user {target_id} of VIP approval: {e}")
+        else:
+            await query.edit_message_caption(caption=query.message.caption + "\n\n❌ رد شد")
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text="❌ متأسفانه رسید پرداخت شما تأیید نشد. با پشتیبانی تماس بگیرید."
+                )
+            except Exception as e:
+                logger.warning(f"failed to notify user {target_id} of VIP rejection: {e}")
+        return
+
     if not is_user_allowed(query.from_user.id):
         logger.warning(f"Access denied for user_id={query.from_user.id} (callback)")
         await query.edit_message_text("⛔️ شما مجاز به استفاده از این ربات نیستید.")
@@ -541,13 +497,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "vip_info":
-        keyboard = [
-            [InlineKeyboardButton(f"⭐ پرداخت با Stars ({VIP_PRICE_STARS})", callback_data="pay_stars")],
-            [InlineKeyboardButton(f"💳 پرداخت ریالی ({VIP_PRICE_RIAL:,} ریال)", callback_data="pay_rial")],
-        ]
         await query.message.reply_text(
             f"💎 **اشتراک VIP** ({VIP_DURATION_DAYS} روز)\n\nروش پرداخت رو انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=_vip_payment_keyboard(),
             parse_mode='Markdown'
         )
         return
@@ -557,15 +509,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "pay_rial":
-        try:
-            pay_url = await asyncio.to_thread(create_zarinpal_payment, query.from_user.id)
-            await query.message.reply_text(
-                "💳 برای پرداخت روی دکمه زیر بزنید:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 پرداخت", url=pay_url)]])
-            )
-        except Exception as e:
-            logger.error(f"zarinpal payment creation failed: {e}")
-            await query.message.reply_text(f"❌ خطا در ایجاد پرداخت: {str(e)[:150]}")
+        await start_card_payment(query, context)
         return
 
     try:
@@ -696,12 +640,10 @@ app.add_handler(CommandHandler("support", support_command))
 app.add_handler(CommandHandler("vip", vip_command))
 app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
+app.add_handler(MessageHandler(filters.PHOTO, receipt_photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 app.add_handler(CallbackQueryHandler(callback_handler))
 
 # ========== اجرا ==========
 if __name__ == "__main__":
-    # سرور کوچیک برای گرفتن callback زرین‌پال — توی یه ترد جدا اجرا می‌شه تا
-    # مزاحم polling اصلی ربات نشه.
-    threading.Thread(target=start_callback_server, daemon=True).start()
     app.run_polling()

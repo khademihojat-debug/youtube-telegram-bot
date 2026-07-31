@@ -155,22 +155,23 @@ def get_available_qualities(link: str) -> Dict[str, str]:
         return {"best": "best"}
 
 
-def _download_video_sync(
-    link: str,
-    quality: str,
-    progress_callback=None
-) -> Tuple[str, Optional[str]]:
+def _build_format_string(quality: str) -> str:
     if quality == "best":
-        fmt = "bestvideo+bestaudio/best"
-    elif quality == "18":
+        return "bestvideo+bestaudio/best"
+    if quality == "18":
         # فرمت ۱۸ یه format_id واقعیه (نه ارتفاع) — پروگرسیو، ویدیو+صدا در یه
         # فایل، معمولاً از محدودیت SABR در امانه.
-        fmt = "18/best"
-    else:
-        # quality اینجا یه عدد ارتفاع (مثل "1080") هست، نه format_id — این
-        # selector همیشه بهترین فرمت موجود در همون ارتفاع رو انتخاب می‌کنه،
-        # صرف‌نظر از اینکه کدوم player client جواب داده.
-        fmt = f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best[height<={quality}]"
+        return "18/best"
+    # quality اینجا یه عدد ارتفاع (مثل "1080") هست، نه format_id — این
+    # selector همیشه بهترین فرمت موجود در همون ارتفاع رو انتخاب می‌کنه،
+    # صرف‌نظر از اینکه کدوم player client جواب داده.
+    return f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best[height<={quality}]"
+
+
+def _attempt_download(link: str, quality: str, progress_callback=None) -> Tuple[str, Optional[str]]:
+    """یه تلاش واحد برای دانلود با یه format مشخص. بدون هیچ fallback داخلی —
+    اگه شکست بخوره، Exception رو raise می‌کنه تا caller تصمیم بگیره."""
+    fmt = _build_format_string(quality)
 
     ydl_opts = _base_opts()
     ydl_opts.update({
@@ -185,57 +186,67 @@ def _download_video_sync(
 
     cookie = get_cookie_file()
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=True)
-            if info is None:
-                raise Exception("Could not extract video info")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(link, download=True)
+        if info is None:
+            raise Exception("Could not extract video info")
 
-            filename = ydl.prepare_filename(info)
-            if not filename.endswith(".mp4"):
-                base = os.path.splitext(filename)[0]
-                if os.path.exists(base + ".mp4"):
-                    filename = base + ".mp4"
+        filename = ydl.prepare_filename(info)
+        if not filename.endswith(".mp4"):
+            base = os.path.splitext(filename)[0]
+            if os.path.exists(base + ".mp4"):
+                filename = base + ".mp4"
 
-            thumb = None
-            if info.get("thumbnails"):
-                try:
-                    ydl_opts_thumb = {
-                        "quiet": True,
-                        "no_warnings": True,
-                        "skip_download": True,
-                        "writethumbnail": True,
-                        "outtmpl": os.path.splitext(filename)[0],
-                    }
+        thumb = None
+        if info.get("thumbnails"):
+            try:
+                ydl_opts_thumb = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "skip_download": True,
+                    "writethumbnail": True,
+                    "outtmpl": os.path.splitext(filename)[0],
+                }
 
-                    if cookie:
-                        ydl_opts_thumb["cookiefile"] = cookie
+                if cookie:
+                    ydl_opts_thumb["cookiefile"] = cookie
 
-                    with yt_dlp.YoutubeDL(ydl_opts_thumb) as ydl_thumb:
-                        ydl_thumb.download([link])
+                with yt_dlp.YoutubeDL(ydl_opts_thumb) as ydl_thumb:
+                    ydl_thumb.download([link])
 
-                    for ext in [".jpg", ".jpeg", ".png", ".webp"]:
-                        test_path = os.path.splitext(filename)[0] + ext
-                        if os.path.exists(test_path):
-                            thumb = test_path
-                            break
-                except Exception:
-                    pass
+                for ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                    test_path = os.path.splitext(filename)[0] + ext
+                    if os.path.exists(test_path):
+                        thumb = test_path
+                        break
+            except Exception:
+                pass
 
-            return filename, thumb
+        return filename, thumb
 
-    except Exception as e:
-        logger.error(f"_download_video_sync failed for {link} (quality={quality}): {e}")
-        if quality != "best":
-            return _download_video_sync(link, "best", progress_callback)
-        if quality != "18":
-            # آخرین راه‌چاره: فرمت ۱۸ (۳۶۰p، ویدیو+صدا در یه فایل واحد) یه
-            # فرمت progressive قدیمیه که بر خلاف فرمت‌های adaptive، معمولاً
-            # از محدودیت SABR یوتیوب در امان می‌مونه. کیفیتش پایینه ولی
-            # حداقل چیزی دانلود می‌شه به‌جای شکست کامل.
-            logger.warning(f"Falling back to format 18 (360p progressive) for {link}")
-            return _download_video_sync(link, "18", progress_callback)
-        raise
+
+def _download_video_sync(
+    link: str,
+    quality: str,
+    progress_callback=None
+) -> Tuple[str, Optional[str]]:
+    # ترتیب تلاش‌ها: اول کیفیت درخواستی، بعد best، بعد فرمت ۱۸ (progressive،
+    # مقاوم در برابر SABR) به‌عنوان آخرین راه‌چاره. هر کدوم فقط یه‌بار امتحان
+    # می‌شه — بدون recursion و بدون امکان حلقه‌ی بی‌نهایت.
+    attempts = []
+    for q in (quality, "best", "18"):
+        if q not in attempts:
+            attempts.append(q)
+
+    last_error = None
+    for attempt_quality in attempts:
+        try:
+            return _attempt_download(link, attempt_quality, progress_callback)
+        except Exception as e:
+            last_error = e
+            logger.error(f"_download_video_sync failed for {link} (quality={attempt_quality}): {e}")
+
+    raise last_error
 
 
 async def download_video(

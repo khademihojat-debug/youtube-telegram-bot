@@ -187,3 +187,59 @@ def _download_audio_sync(link: str, bitrate: str = "128", progress_callback=None
 
 async def download_audio(link: str, bitrate: str = "128", progress_callback=None) -> str:
     return await asyncio.to_thread(_download_audio_sync, link, bitrate, progress_callback)
+
+
+# ========== جداسازی وکال (Vocal Extraction) ==========
+# با Spleeter (مدل ۲-استمی: وکال + بقیه‌ی ساز‌ها). مدل موقع اولین استفاده
+# دانلود می‌شه (~۱۷ مگابایت) و توی حافظه نگه داشته می‌شه تا دفعات بعد سریع‌تر باشه.
+
+_separator = None
+
+
+def _get_separator():
+    global _separator
+    if _separator is None:
+        from spleeter.separator import Separator
+        logger.info("Loading Spleeter model (first run may take a while)...")
+        _separator = Separator('spleeter:2stems')
+    return _separator
+
+
+def _extract_vocals_sync(input_path: str) -> str:
+    import subprocess
+
+    separator = _get_separator()
+
+    out_dir = os.path.join(DOWNLOAD_DIR, f"sep_{int(time.time())}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    separator.separate_to_file(input_path, out_dir)
+
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    vocals_wav = os.path.join(out_dir, base_name, "vocals.wav")
+
+    if not os.path.exists(vocals_wav):
+        raise Exception("جداسازی وکال ناموفق بود — فایل خروجی پیدا نشد")
+
+    # تبدیل به mp3 برای حجم کمتر (Spleeter خروجی wav خام می‌ده که حجمش بالاست)
+    vocals_mp3 = os.path.join(out_dir, "vocals.mp3")
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", vocals_wav, "-codec:a", "libmp3lame", "-b:a", "192k", vocals_mp3],
+        capture_output=True,
+        timeout=300,
+    )
+
+    if result.returncode != 0 or not os.path.exists(vocals_mp3):
+        logger.warning(f"ffmpeg mp3 conversion failed, falling back to wav: {result.stderr.decode(errors='ignore')[:300]}")
+        return vocals_wav
+
+    try:
+        os.remove(vocals_wav)
+    except Exception:
+        pass
+
+    return vocals_mp3
+
+
+async def extract_vocals(input_path: str) -> str:
+    return await asyncio.to_thread(_extract_vocals_sync, input_path)

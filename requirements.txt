@@ -1,7 +1,4 @@
 python-telegram-bot>=20.7
-yt-dlp>=2026.7.20
-aiofiles
 requests>=2.31.0
 Pixeldrain==1.1.2
 python-dotenv
-spleeter

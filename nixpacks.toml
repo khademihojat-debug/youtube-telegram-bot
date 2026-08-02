@@ -1,0 +1,5 @@
+# اضافه کردن ffmpeg به محیط بیلد Railway — چون Spleeter و ذخیره‌سازی خروجی
+# صدا به فرمت mp3 به ffmpeg نیاز دارن، و Nixpacks (بیلدر پیش‌فرض Railway
+# برای پروژه‌های پایتون) به‌طور پیش‌فرض ffmpeg رو نصب نمی‌کنه.
+[phases.setup]
+aptPkgs = ["ffmpeg"]

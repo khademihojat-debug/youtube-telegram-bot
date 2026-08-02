@@ -22,7 +22,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from downloader import get_available_qualities, download_video, download_audio, extract_vocals, is_playlist
+from downloader import get_available_qualities, download_video, download_audio, is_playlist
 from database import (
     init_db,
     get_daily_count,
@@ -460,7 +460,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard.append([InlineKeyboardButton("🎵 MP3 128kbps", callback_data=f"a|{uid}|128")])
         keyboard.append([InlineKeyboardButton("🎵 MP3 320kbps", callback_data=f"a|{uid}|320")])
-        keyboard.append([InlineKeyboardButton("🎤 فقط وکال (بدون موزیک)", callback_data=f"vo|{uid}|1")])
 
         await msg.edit_text(
             "🎯 **کیفیت مورد نظر را انتخاب کنید:**",
@@ -621,16 +620,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename = await download_audio(link, quality, update_progress)
                 thumb = None
                 caption = "🎵 فایل صوتی دانلود شد!"
-            elif action == "vo":
-                raw_audio = await download_audio(link, "320", update_progress)
-                try:
-                    await progress_msg.edit_text("🎤 در حال جداسازی صدای وکال... (ممکنه کمی طول بکشه)")
-                except Exception:
-                    pass
-                filename = await extract_vocals(raw_audio)
-                await safe_remove_file(raw_audio)
-                thumb = None
-                caption = "🎤 وکال جدا شد!"
             else:
                 await query.edit_message_text("❌ عملیات نامعتبر.")
                 return

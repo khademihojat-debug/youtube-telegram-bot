@@ -55,9 +55,27 @@ def _cobalt_request(payload: dict) -> dict:
 
     if data.get("status") == "error":
         code = data.get("error", {}).get("code", "unknown")
-        raise Exception(f"Cobalt error: {code}")
+        raise Exception(_translate_cobalt_error(code))
 
     return data
+
+
+# نگاشت کدهای خطای شناخته‌شده‌ی Cobalt به پیام‌های روشن فارسی. کدهای ناشناخته
+# رو همون‌طور خام برمی‌گردونیم تا موقع دیباگ گم نشن.
+_COBALT_ERROR_MESSAGES = {
+    "error.api.youtube.login": "🔞 این ویدیو محدودیت سنی داره یا نیاز به لاگین یوتیوب داره — قابل دانلود نیست.",
+    "error.api.youtube.api_error": "🔞 این ویدیو محدودیت سنی/دسترسی داره و یوتیوب اجازه‌ی دانلودش رو نمی‌ده.",
+    "error.api.content.video.age": "🔞 این ویدیو محدودیت سنی داره — قابل دانلود نیست.",
+    "error.api.youtube.no_video": "❌ ویدیو پیدا نشد یا حذف شده.",
+    "error.api.youtube.decipher": "❌ خطای فنی موقت در استخراج ویدیو — چند دقیقه دیگه دوباره امتحان کنید.",
+    "error.api.link.invalid": "❌ لینک نامعتبره یا این پلتفرم پشتیبانی نمی‌شه.",
+    "error.api.content.too_long": "❌ این ویدیو خیلی طولانیه و قابل دانلود نیست.",
+    "error.api.fetch.fail": "❌ خطا در دریافت اطلاعات — لینک رو بررسی کنید یا دوباره امتحان کنید.",
+}
+
+
+def _translate_cobalt_error(code: str) -> str:
+    return _COBALT_ERROR_MESSAGES.get(code, f"❌ خطا: {code}")
 
 
 def _report_progress(progress_callback, percent: int):

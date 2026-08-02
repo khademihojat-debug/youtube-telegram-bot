@@ -4,3 +4,4 @@ aiofiles
 requests>=2.31.0
 Pixeldrain==1.1.2
 python-dotenv
+spleeter
